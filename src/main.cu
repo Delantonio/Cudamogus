@@ -9,6 +9,33 @@
 #include <filesystem>
 #include <numeric>
 
+__global__ void reduce1(int *g_idata, int *g_odata, int size)
+{
+    extern __shared__ int sdata[];
+
+    unsigned int tid = threadIdx.x;
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= size)
+        return;
+    sdata[tid] = g_idata[i];
+    __syncthreads();
+
+    for (unsigned int s = 1; s < blockDim.x; s *= 2)
+    {
+        int index = 2 * s * tid;
+        if (index < blockDim.x)
+        {
+            sdata[index] += sdata[index + s];
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0)
+    {
+        g_odata[blockIdx.x] = sdata[0];
+    }
+}
+
 int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 {
     // -- Pipeline initialization
@@ -58,13 +85,50 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
     // TODO : make it GPU compatible (aka faster)
     // You can use multiple CPU threads for your GPU version using openmp or not
     // Up to you :)
+
+    // #pragma omp parallel for
+    // for (int i = 0; i < nb_images; ++i)
+    // {
+    //     auto& image = images[i];
+    //     const int image_size = image.width * image.height;
+    //     image.to_sort.total = std::reduce(image.buffer.cbegin(), image.buffer.cbegin() + image_size, 0);
+    // }
+    
+    const int block_size = 1024;
+    const int grid_size = (nb_images + block_size - 1) / block_size;
+    dim3 nb_threads(32, 32);
+
     #pragma omp parallel for
-    for (int i = 0; i < nb_images; ++i)
+    for (int i = 0; i < nb_images; i++)
     {
-        auto& image = images[i];
-        const int image_size = image.width * image.height;
-        image.to_sort.total = std::reduce(image.buffer.cbegin(), image.buffer.cbegin() + image_size, 0);
+        dim3 nb_blocks((images[i].width + nb_threads.x - 1) / nb_threads.x,
+                       (images[i].height + nb_threads.y - 1) / nb_threads.y);
+        
+        int buffer_size = images[i].width * images[i].height;
+
+        int *in_buffer;
+        int *out_buffer;
+        int *tmp;
+
+        cudaMalloc((void**)&in_buffer, buffer_size * sizeof(int));
+        cudaMalloc((void**)&out_buffer, buffer_size * sizeof(int));
+
+        cudaMemcpy(&in_buffer, images[i].buffer.data(), buffer_size * sizeof(int), cudaMemcpyHostToDevice);
+
+        // Local reduction
+        reduce1<<<nb_blocks, nb_threads, sizeof(int) * block_size>>>(in_buffer, tmp, buffer_size);
+        // Global reduction
+        reduce1<<<block_size, 1, sizeof(int) * block_size>>>(tmp, out_buffer, buffer_size);
+
+        cudaMemcpy(&images[i].to_sort.total, out_buffer, sizeof(int), cudaMemcpyDeviceToHost);
+        
+        printf("Total : %d", images[i].to_sort.total);
+        //printf("Total : %d", out_buffer[0]);
+
+        cudaFree(in_buffer);
+        cudaFree(out_buffer);
     }
+
 
     // - All totals are known, sort images accordingly (OPTIONAL)
     // Moving the actual images is too expensive, sort image indices instead
