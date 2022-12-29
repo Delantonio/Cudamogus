@@ -19,7 +19,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 
     using recursive_directory_iterator = std::filesystem::recursive_directory_iterator;
     std::vector<std::string> filepaths;
-    for (const auto& dir_entry : recursive_directory_iterator("/afs/cri.epita.fr/resources/teach/IRGPUA/images"))
+    for (const auto& dir_entry : recursive_directory_iterator("../images"))
         filepaths.emplace_back(dir_entry.path());
 
     // - Init pipeline object
