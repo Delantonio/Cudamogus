@@ -1,6 +1,7 @@
 #include "image.hh"
 #include "pipeline.hh"
 #include "fix_cpu.hh"
+#include "cuda_utils.cuh"
 
 #include <cub/cub.cuh>
 #include <vector>
@@ -10,31 +11,67 @@
 #include <filesystem>
 #include <numeric>
 
-__global__ void reduce1(int *g_idata, int *g_odata, int size)
+template <int BLOCK_SIZE>
+__device__
+void warp_reduce(int* sdata, int tid) {
+    if (BLOCK_SIZE >= 64) {sdata[tid] += sdata[tid + 32]; __syncwarp(); }
+    if (BLOCK_SIZE >= 32) {sdata[tid] += sdata[tid + 16]; __syncwarp(); }
+    if (BLOCK_SIZE >= 16) {sdata[tid] += sdata[tid + 8]; __syncwarp(); }
+    if (BLOCK_SIZE >= 8) {sdata[tid] += sdata[tid + 4]; __syncwarp(); }
+    if (BLOCK_SIZE >= 4) {sdata[tid] += sdata[tid + 2]; __syncwarp(); }
+    if (BLOCK_SIZE >= 2) {sdata[tid] += sdata[tid + 1]; __syncwarp(); }
+}
+
+template <typename T, int BLOCK_SIZE>
+__global__
+void kernel_reduce(const T* __restrict__ buffer, T* __restrict__ total, int size)
 {
     extern __shared__ int sdata[];
 
-    unsigned int tid = threadIdx.x;
-    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= size)
-        return;
-    sdata[tid] = g_idata[i];
+    const unsigned int tid = threadIdx.x;
+    unsigned int i = blockIdx.x * (blockDim.x * 2) + threadIdx.x;
+
+    sdata[tid] = buffer[i] + buffer[i + blockDim.x];
     __syncthreads();
 
-    for (unsigned int s = 1; s < blockDim.x; s *= 2)
-    {
-        int index = 2 * s * tid;
-        if (index < blockDim.x)
-        {
-            sdata[index] += sdata[index + s];
-        }
-        __syncthreads();
+    if constexpr (BLOCK_SIZE >= 512) {
+        if (tid < 256) { sdata[tid] += sdata[tid + 256]; } __syncthreads();
+    }
+    if constexpr (BLOCK_SIZE >= 256) {
+        if (tid < 128) { sdata[tid] += sdata[tid + 128]; } __syncthreads();
+    }
+    if constexpr (BLOCK_SIZE >= 128) {
+        if (tid < 64) { sdata[tid] += sdata[tid + 64]; } __syncthreads();
     }
 
-    if (tid == 0)
-    {
-        g_odata[blockIdx.x] = sdata[0];
-    }
+    if (tid < 32)
+        warp_reduce<BLOCK_SIZE>(sdata, tid);
+
+    if (tid == 0) total[blockIdx.x] = sdata[0];
+}
+
+template <typename T>
+__global__
+void kernel_final_add(const T* __restrict__ buffer, T* __restrict__ total, int size)
+{
+    const int id = threadIdx.x + blockIdx.x * blockDim.x;
+    if (id < size)
+        atomicAdd(&total[0], buffer[id]);
+}
+
+void reduce(CudaArray1D<int> buffer, CudaArray1D<int> total)
+{
+    constexpr int blocksize = 512;
+    const int gridsize = (buffer.size_ + blocksize - 1) / (blocksize * 2);
+
+    int *tmp;
+    cudaMalloc(&tmp, gridsize * sizeof(int));
+
+	kernel_reduce<int, blocksize><<<gridsize, blocksize, blocksize * sizeof(int)>>>(buffer.data_, tmp, buffer.size_);
+    kernel_final_add<int><<<gridsize / blocksize + 1, blocksize>>>(tmp, total.data_, gridsize);
+
+    cudaDeviceSynchronize();
+    cudaCheckError();
 }
 
 
