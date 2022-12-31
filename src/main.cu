@@ -94,6 +94,36 @@ void kernel_scanSum(T* buffer, T* scan_A, T* scan_P, int* blockstates, int* coun
     }
 }
 
+void scan(CudaArray1D<int> buffer)
+{
+    constexpr int blocksize = 256;
+    int nb_blocks = buffer.size_ / blocksize;
+    if (nb_blocks == 0)
+    {
+        nb_blocks = 1;
+    }
+
+    int* scan_A;
+    cudaMalloc(&scan_A, nb_blocks * sizeof(int));
+    cudaMemset(scan_A, 0, nb_blocks * sizeof(int));
+    
+    int* scan_P;
+    cudaMalloc(&scan_P, nb_blocks * sizeof(int));
+    cudaMemset(scan_P, 0, nb_blocks * sizeof(int));
+
+    int* blockstates;
+    cudaMalloc(&blockstates, nb_blocks * sizeof(int));
+    cudaMemset(blockstates, 0, nb_blocks * sizeof(int)); // 0 = X; 1 == A; 2 == P
+
+    int* counter;
+    cudaMalloc(&counter, sizeof(int));
+    cudaMemset(counter, 0, sizeof(int));
+
+    kernel_scanSum<int><<<nb_blocks, blocksize, sizeof(int)>>>(buffer.data_, scan_A, scan_P, blockstates, counter, buffer.size_);
+
+    cudaDeviceSynchronize();
+}
+
 template <int BLOCK_SIZE>
 __device__
 void warp_reduce(int* sdata, int tid) {
