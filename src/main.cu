@@ -13,7 +13,7 @@
 
 template <typename T>
 __global__
-void kernel_scanSum(T* buffer, T* scan_A, T* scan_P, int* blockstates, int* counter, int size) // scan_A + scan_P + blockstates are the same size (buffer_size / nb_blocks)
+void kernel_scanSum(T* buffer, T* scan_A, T* scan_P, int* blockstates, int* counter, int size) // scan_A + scan_P + blockstates are the same size (buffer_size / block_size)
 {
     __shared__ int blockidx;
     
