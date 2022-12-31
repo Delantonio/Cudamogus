@@ -7,6 +7,12 @@
 #include <vector>
 #include <sstream>
 
+#ifdef _WIN32
+    #define NEWLINE_LEN 2
+#else
+    #define NEWLINE_LEN 1
+#endif
+
 struct Image
 {
     Image() = default;
@@ -22,7 +28,7 @@ struct Image
 
         std::string magic;
         infile >> magic;
-        infile.seekg(1, infile.cur);
+        infile.seekg(NEWLINE_LEN, infile.cur);
         char c;
         infile.get(c);
         while (c == '#')
@@ -41,7 +47,7 @@ struct Image
 
         if (magic == "P5")
         {
-            infile.seekg(1, infile.cur);
+            infile.seekg(NEWLINE_LEN, infile.cur);
             for (int i = 0; i < width * height; ++i)
             {
                 uint8_t pixel_char;
@@ -51,7 +57,7 @@ struct Image
         }
         else if (magic == "P?")
         {
-            infile.seekg(1, infile.cur);
+            infile.seekg(NEWLINE_LEN, infile.cur);
             
             std::string line;
             std::getline(infile, line);

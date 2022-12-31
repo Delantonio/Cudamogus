@@ -61,7 +61,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
     using recursive_directory_iterator = std::filesystem::recursive_directory_iterator;
     std::vector<std::string> filepaths;
     for (const auto& dir_entry : recursive_directory_iterator("../images"))
-        filepaths.emplace_back(dir_entry.path());
+        filepaths.emplace_back(dir_entry.path().string());
 
     // - Init pipeline object
 
@@ -73,7 +73,6 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
     std::vector<Image> images(nb_images);
 
     // - One CPU thread is launched for each image
-
     std::cout << "Done, starting compute" << std::endl;
 
     #pragma omp parallel for
@@ -176,7 +175,7 @@ int cpu_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
     using recursive_directory_iterator = std::filesystem::recursive_directory_iterator;
     std::vector<std::string> filepaths;
     for (const auto& dir_entry : recursive_directory_iterator("../images"))
-        filepaths.emplace_back(dir_entry.path());
+        filepaths.emplace_back(dir_entry.path().string());
 
     // - Init pipeline object
 
