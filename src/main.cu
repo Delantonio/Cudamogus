@@ -13,7 +13,91 @@
 
 template <typename T>
 __global__
-void kernel_scanSum(T* buffer, T* scan_A, T* scan_P, int* blockstates, int* counter, int size) // scan_A + scan_P + blockstates are the same size (buffer_size / block_size)
+void kernel_exclusive_scan(T* buffer, T* scan_A, T* scan_P, int* blockstates, int* counter, int size) // scan_A + scan_P + blockstates are the same size (buffer_size / block_size)
+{
+    __shared__ int blockidx;
+    
+    if (threadIdx.x == 0)
+    {
+        blockidx = atomicAdd(counter, 1);
+    }
+    __syncthreads();
+    
+    int i = threadIdx.x + blockidx * blockDim.x;
+    
+    if (i >= size)
+    {
+        return;
+    }
+
+    // local scan TODO make it exclusive
+    for (int j = 1; j < blockDim.x; j *= 2)
+    {
+        int tmp = buffer[i - j];
+        __syncthreads();
+
+        if (i - blockidx * blockDim.x >= j)
+            buffer[i] += tmp;
+        __syncthreads();
+    }
+
+    if (threadIdx.x == 0)
+    {
+        if (blockidx == 0)
+        {
+            atomicAdd(scan_P + blockidx, buffer[(blockidx+1) * blockDim.x - 1]);
+            __threadfence_system();
+            blockstates[blockidx] = 2;
+        }
+        else
+        {
+            atomicAdd(scan_A + blockidx, buffer[(blockidx+1) * blockDim.x - 1]);
+            //__threadfence_system();
+            blockstates[blockidx] = 1;
+        }
+    }
+    __syncthreads();
+
+    if (blockidx > 0)
+    {
+        //look back
+        if (threadIdx.x == 0)
+        {
+            int idx = blockidx - 1;
+            int state = atomicAdd(blockstates + idx, 0);
+            //__threadfence_system();
+            while (state != 2)
+            {
+                if (state == 1)
+                {
+                    int prev = atomicAdd(scan_A + idx, 0);
+                    //__threadfence_system();
+                    scan_P[blockidx] += prev;
+                    idx--;
+                }
+                state = atomicAdd(blockstates + idx, 0);
+                //__threadfence_system();
+            }
+
+            // prefix found
+            int prevP = atomicAdd(scan_P + idx, 0);
+            //__threadfence_system();
+            int prevA = scan_A[idx];//atomicAdd(scan_A + idx, 0);
+            //__threadfence_system();
+
+            scan_P[blockidx] += prevP + prevA;
+            blockstates[blockidx] = 2;
+        }
+        
+        __syncthreads();
+        buffer[i] += scan_P[blockidx];
+    }
+}
+
+
+template <typename T>
+__global__
+void kernel_inclusive_scan(T* buffer, T* scan_A, T* scan_P, int* blockstates, int* counter, int size) // scan_A + scan_P + blockstates are the same size (buffer_size / block_size)
 {
     __shared__ int blockidx;
     
@@ -94,36 +178,6 @@ void kernel_scanSum(T* buffer, T* scan_A, T* scan_P, int* blockstates, int* coun
     }
 }
 
-void scan(CudaArray1D<int> buffer)
-{
-    constexpr int blocksize = 256;
-    int nb_blocks = buffer.size_ / blocksize;
-    if (nb_blocks == 0)
-    {
-        nb_blocks = 1;
-    }
-
-    int* scan_A;
-    cudaMalloc(&scan_A, nb_blocks * sizeof(int));
-    cudaMemset(scan_A, 0, nb_blocks * sizeof(int));
-    
-    int* scan_P;
-    cudaMalloc(&scan_P, nb_blocks * sizeof(int));
-    cudaMemset(scan_P, 0, nb_blocks * sizeof(int));
-
-    int* blockstates;
-    cudaMalloc(&blockstates, nb_blocks * sizeof(int));
-    cudaMemset(blockstates, 0, nb_blocks * sizeof(int)); // 0 = X; 1 == A; 2 == P
-
-    int* counter;
-    cudaMalloc(&counter, sizeof(int));
-    cudaMemset(counter, 0, sizeof(int));
-
-    kernel_scanSum<int><<<nb_blocks, blocksize, sizeof(int)>>>(buffer.data_, scan_A, scan_P, blockstates, counter, buffer.size_);
-
-    cudaDeviceSynchronize();
-}
-
 template <int BLOCK_SIZE>
 __device__
 void warp_reduce(int* sdata, int tid) {
@@ -188,16 +242,89 @@ void reduce(CudaArray1D<int> buffer, CudaArray1D<int> total)
 }
 
 
-__global__ void fix_image_gpu(int *image_data, int image_size, int *predicate)
+
+template<Typename T>
+__global__ void build_predicate(T *image_data, T* predicate)
 {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     if (tid >= image_size)
         return;
     
-    predicate[tid] = 0;
     int garbage_value = -27;
     if (image_data[tid] != garbage_value)
         predicate[tid] = 1;
+}
+
+template<Typename T>
+__global__ void scatter_corresponding_adresses_and_apply_map_to_pixels(T *image_data, T* predicate)
+{
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i >= image_size)
+        return;
+    
+    int garbage_value = -27;
+    if (image_data[i] != garbage_value)
+        image_data[predicate[i]] = image_data[i];
+
+    if (i % 4 == 0)
+        image_data[i] += 1;
+    else if (i % 4 == 1)
+        image_data[i] -= 5;
+    else if (i % 4 == 2)
+        image_data[i] += 3;
+    else if (i % 4 == 3)
+        image_data[i] -= 8;
+}
+
+void fix_image_gpu(int *image_data, int image_size)
+{
+    constexpr int blocksize = 256;
+    int nb_blocks = image_size / blocksize;
+    if (nb_blocks == 0)
+    {
+        nb_blocks = 1;
+    } 
+
+    int *predicate;
+    cudaMalloc(&predicate, image_size * sizeof(int));
+    cudaMemset(predicate, 0, image_size * sizeof(int));
+
+    build_predicate<int><<<nb_blocks, blocksize>>>(image_data, predicate);
+    
+    cudaDeviceSynchronize();
+
+    int* scan_A;
+    cudaMalloc(&scan_A, nb_blocks * sizeof(int));
+    cudaMemset(scan_A, 0, nb_blocks * sizeof(int));
+    
+    int* scan_P;
+    cudaMalloc(&scan_P, nb_blocks * sizeof(int));
+    cudaMemset(scan_P, 0, nb_blocks * sizeof(int));
+
+    int* blockstates;
+    cudaMalloc(&blockstates, nb_blocks * sizeof(int));
+    cudaMemset(blockstates, 0, nb_blocks * sizeof(int)); // 0 = X; 1 == A; 2 == P
+
+    int* counter;
+    cudaMalloc(&counter, sizeof(int));
+    cudaMemset(counter, 0, sizeof(int));
+
+    // check if it is an exclusive scan
+    kernel_exclusive_scan<int><<<nb_blocks, blocksize, sizeof(int)>>>(predicate, scan_A, scan_P, blockstates, counter, image_size);
+
+    cudaDeviceSynchronize();
+    
+    scatter_corresponding_adresses_and_apply_map_to_pixels<int><<<nb_blocks, blocksize>>>(image_data, predicate);
+
+    // do histogram
+
+    // do inclusive scan
+    kernel_inclusive_scan<int><<<nb_blocks, blocksize, sizeof(int)>>>(predicate, scan_A, scan_P, blockstates, counter, image_size);
+
+    //find first non zero
+
+    //Apply map transformation of the histogram equalization
+    
 }
 
 int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
