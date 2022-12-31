@@ -243,8 +243,8 @@ void reduce(CudaArray1D<int> buffer, CudaArray1D<int> total)
 
 
 
-template<Typename T>
-__global__ void build_predicate(T *image_data, T* predicate)
+template<typename T>
+__global__ void build_predicate(T *image_data, T* predicate, int image_size)
 {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     if (tid >= image_size)
@@ -255,8 +255,8 @@ __global__ void build_predicate(T *image_data, T* predicate)
         predicate[tid] = 1;
 }
 
-template<Typename T>
-__global__ void scatter_corresponding_adresses_and_apply_map_to_pixels(T *image_data, T* predicate)
+template<typename T>
+__global__ void scatter_corresponding_adresses_and_apply_map_to_pixels(T *image_data, T* predicate, int image_size)
 {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
     if (i >= image_size)
@@ -276,6 +276,7 @@ __global__ void scatter_corresponding_adresses_and_apply_map_to_pixels(T *image_
         image_data[i] -= 8;
 }
 
+// Mano
 void fix_image_gpu(int *image_data, int image_size)
 {
     constexpr int blocksize = 256;
@@ -289,7 +290,7 @@ void fix_image_gpu(int *image_data, int image_size)
     cudaMalloc(&predicate, image_size * sizeof(int));
     cudaMemset(predicate, 0, image_size * sizeof(int));
 
-    build_predicate<int><<<nb_blocks, blocksize>>>(image_data, predicate);
+    build_predicate<int><<<nb_blocks, blocksize>>>(image_data, predicate, image_size);
     
     cudaDeviceSynchronize();
 
@@ -314,7 +315,7 @@ void fix_image_gpu(int *image_data, int image_size)
 
     cudaDeviceSynchronize();
     
-    scatter_corresponding_adresses_and_apply_map_to_pixels<int><<<nb_blocks, blocksize>>>(image_data, predicate);
+    scatter_corresponding_adresses_and_apply_map_to_pixels<int><<<nb_blocks, blocksize>>>(image_data, predicate, image_size);
 
     // do histogram
 
@@ -324,9 +325,128 @@ void fix_image_gpu(int *image_data, int image_size)
     //find first non zero
 
     //Apply map transformation of the histogram equalization
+}
     
+// Cub version
+void fix_image(Image& to_fix)
+{
+    const int image_size = to_fix.width * to_fix.height;
+
+    // #1 Compact
+
+    // Build predicate vector
+
+    std::vector<int> predicate(to_fix.buffer.size(), 0);
+
+    constexpr int garbage_val = -27;
+    for (std::size_t i = 0; i < to_fix.buffer.size(); ++i)
+        if (to_fix.buffer[i] != garbage_val)
+            predicate[i] = 1;
+
+    // Compute the exclusive sum of the predicate
+
+    int *d_es_input;
+    cudaMalloc(&d_es_input, to_fix.buffer.size() * sizeof(int));
+    cudaMemcpy(d_es_input, predicate.data(), to_fix.buffer.size() * sizeof(int),
+               cudaMemcpyHostToDevice);
+
+    int *d_es_scan; // exclusive sum scan
+    cudaMalloc(&d_es_scan, to_fix.buffer.size() * sizeof(int));
+
+    void *d_temp_storage = NULL;
+    size_t temp_storage_bytes = 0;
+    cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_es_input,
+                                  d_es_scan, to_fix.buffer.size());
+    cudaMalloc(&d_temp_storage, temp_storage_bytes);
+    cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_es_input,
+                                  d_es_scan, to_fix.buffer.size());
+
+    cudaDeviceSynchronize();
+
+    cudaMemcpy(predicate.data(), d_es_scan, to_fix.buffer.size() * sizeof(int),
+               cudaMemcpyDeviceToHost);
+
+    cudaFree(d_es_input);
+    cudaFree(d_es_scan);
+    
+    // std::exclusive_scan(predicate.begin(), predicate.end(), predicate.begin(), 0);
+
+    // Scatter to the corresponding addresses
+
+    for (std::size_t i = 0; i < predicate.size(); ++i)
+        if (to_fix.buffer[i] != garbage_val)
+            to_fix.buffer[predicate[i]] = to_fix.buffer[i];
+
+
+    // #2 Apply map to fix pixels
+
+    for (int i = 0; i < image_size; ++i)
+    {
+        if (i % 4 == 0)
+            to_fix.buffer[i] += 1;
+        else if (i % 4 == 1)
+            to_fix.buffer[i] -= 5;
+        else if (i % 4 == 2)
+            to_fix.buffer[i] += 3;
+        else if (i % 4 == 3)
+            to_fix.buffer[i] -= 8;
+    }
+
+    // #3 Histogram equalization
+
+    // Histogram
+
+    std::array<int, 256> histo;
+    histo.fill(0);
+    for (int i = 0; i < image_size; ++i)
+        ++histo[to_fix.buffer[i]];
+
+    // Compute the inclusive sum scan of the histogram
+
+    int *d_is_input;
+    cudaMalloc(&d_is_input, 256 * sizeof(int));
+    cudaMemcpy(d_is_input, histo.data(), 256 * sizeof(int),
+               cudaMemcpyHostToDevice);
+
+    int *d_is_scan; // inclusive sum scan
+    cudaMalloc(&d_is_scan, 256 * sizeof(int));
+
+    void *d_is_temp_storage = NULL;
+    size_t is_temp_storage_bytes = 0;
+    cub::DeviceScan::InclusiveSum(d_is_temp_storage, is_temp_storage_bytes, d_is_input,
+                                  d_is_scan, 256);
+    cudaMalloc(&d_is_temp_storage, is_temp_storage_bytes);
+    cub::DeviceScan::InclusiveSum(d_is_temp_storage, is_temp_storage_bytes, d_is_input,
+                                  d_is_scan, 256);
+
+    cudaDeviceSynchronize();
+
+    cudaMemcpy(histo.data(), d_is_scan, 256 * sizeof(int),
+               cudaMemcpyDeviceToHost);
+
+    cudaFree(d_is_input);
+    cudaFree(d_is_scan);
+    // std::inclusive_scan(histo.begin(), histo.end(), histo.begin());
+
+    // Find the first non-zero value in the cumulative histogram
+
+    auto first_none_zero = std::find_if(histo.begin(), histo.end(), [](auto v) { return v != 0; });
+
+    const int cdf_min = *first_none_zero;
+
+    // Apply the map transformation of the histogram equalization
+
+    std::transform(to_fix.buffer.data(), to_fix.buffer.data() + image_size, to_fix.buffer.data(),
+        [image_size, cdf_min, &histo](int pixel)
+            {
+                return std::roundf(((histo[pixel] - cdf_min) / static_cast<float>(image_size - cdf_min)) * 255.0f);
+            }
+    );
 }
 
+// Mano main
+
+// Cub main
 int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 {
     // -- Pipeline initialization
@@ -363,7 +483,8 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         // You must get the image from the pipeline as they arrive and launch computations right away
         // There are still ways to speeds this process of course (wait for last class)
         images[i] = pipeline.get_image(i);
-        fix_image_cpu(images[i]);
+        //fix_image_cpu(images[i]);
+        fix_image(images[i]);
     }
 
     std::cout << "Done with compute, starting stats" << std::endl;
@@ -441,6 +562,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
     return 0;
 }
 
+// Given Main
 int cpu_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 {
     // -- Pipeline initialization
