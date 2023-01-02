@@ -32,7 +32,6 @@ void kernel_exclusive_scan(T* buffer, T* scan_A, T* scan_P, int* blockstates, in
         return;
     }
 
-    // local scan TODO make it exclusive
     for (int j = 1; j < blockDim.x; j *= 2)
     {
         int tmp = buffer[i - j];
@@ -42,9 +41,14 @@ void kernel_exclusive_scan(T* buffer, T* scan_A, T* scan_P, int* blockstates, in
             buffer[i] += tmp;
         __syncthreads();
     }
+    
+    int tmp = buffer[i - 1];
+    __syncthreads();
+    buffer[i] = tmp;
 
     if (threadIdx.x == 0)
     {
+        buffer[i] = 0;
         if (blockidx == 0)
         {
             atomicAdd(scan_P + blockidx, buffer[(blockidx+1) * blockDim.x - 1]);
