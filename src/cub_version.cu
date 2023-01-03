@@ -117,8 +117,6 @@ void fix_image(Image& to_fix)
     );
 }
 
-// Mano main
-
 // Cub main
 int cub_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 {
@@ -148,7 +146,6 @@ int cub_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
     #pragma omp parallel for
     for (int i = 0; i < nb_images; ++i)
     {
-        // TODO : make it GPU compatible (aka faster)
         // You will need to copy images one by one on the GPU
         // You can store the images the way you want on the GPU
         // But you should treat the pipeline as a pipeline :
@@ -156,7 +153,6 @@ int cub_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         // You must get the image from the pipeline as they arrive and launch computations right away
         // There are still ways to speeds this process of course (wait for last class)
         images[i] = pipeline.get_image(i);
-        //fix_image_cpu(images[i]);
         fix_image(images[i]);
     }
 
@@ -165,10 +161,6 @@ int cub_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
     // -- All images are now fixed : compute stats (total then sort)
 
     // - First compute the total of each image
-
-    // TODO : make it GPU compatible (aka faster)
-    // You can use multiple CPU threads for your GPU version using openmp or not
-    // Up to you :)
 
     #pragma omp parallel for
     for (int i = 0; i < nb_images; ++i)
@@ -203,6 +195,61 @@ int cub_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
     // - All totals are known, sort images accordingly (OPTIONAL)
     // Moving the actual images is too expensive, sort image indices instead
     // Copying to an id array and sort it instead
+    
+    auto image_totals = std::vector<int>(nb_images);
+    std::transform(images.cbegin(), images.cend(), image_totals.begin(), [](const auto& image) { return image.to_sort.total; });
+    auto image_indices = std::vector<int>(nb_images);
+    std::transform(images.cbegin(), images.cend(), image_indices.begin(), [](const auto& image) { return image.to_sort.id; });
+
+    // #pragma omp parallel for
+    // for(int i = 0; i < nb_images; i++)
+    // {
+    //     image_indices[i] = to_sort[i].id;
+    //     image_totals[i] = to_sort[i].total;
+    // }
+
+    int *d_keys_in;
+    int *d_keys_out;
+    int *d_values_in;
+    int *d_values_out;
+
+    cudaMalloc(&d_keys_in, nb_images * sizeof(int));
+    cudaMalloc(&d_keys_out, nb_images * sizeof(int));
+    cudaMalloc(&d_values_in, nb_images * sizeof(int));
+    cudaMalloc(&d_values_out, nb_images * sizeof(int));
+
+    cudaMemcpy(d_keys_in, image_totals.data(), nb_images * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_values_in, image_indices.data(), nb_images * sizeof(Image), cudaMemcpyHostToDevice);
+    
+    void     *d_temp_storage = NULL;
+    size_t   temp_storage_bytes = 0;
+    cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes,
+                                d_keys_in, d_keys_out,
+                                d_values_in, d_values_out,
+                                nb_images);
+    cudaMalloc(&d_temp_storage, temp_storage_bytes);
+    cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes,
+                                d_keys_in, d_keys_out,
+                                d_values_in, d_values_out,
+                                nb_images);
+    cudaDeviceSynchronize();
+    
+    cudaMemcpy(image_totals.data(), d_keys_out, nb_images * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(image_indices.data(), d_values_out, nb_images * sizeof(Image), cudaMemcpyDeviceToHost);
+
+    cudaFree(d_keys_in);
+    cudaFree(d_keys_out);
+    cudaFree(d_values_in);
+    cudaFree(d_values_out);
+    
+    // // - Print sorted images
+    // std::cout << "Done with stats, starting output" << std::endl;
+    // for (int i = 0; i < nb_images; ++i)
+    // {
+    //     // to align the output
+    //     std::string s = image_indices[i] < 10 ? "0" : "";
+    //     std::cout << "# Pre Sorting - Image " << s << image_indices[i] << " : " << image_totals[i] << std::endl;
+    // }
 
     // TODO OPTIONAL : for you GPU version you can store it the way you want
     // But just like the CPU version, moving the actual images while sorting will be too slow
@@ -218,12 +265,22 @@ int cub_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         return a.total < b.total;
     });
 
+    // for (int i = 0; i < nb_images; ++i)
+    // {
+    //     // to align the output
+    //     std::string s = to_sort[i].id < 10 ? "0" : "";
+    //     std::cout << "ToSort #" << s << to_sort[i].id << " total : " << to_sort[i].total << std::endl;
+    // }
+
     // TODO : Test here that you have the same results
     // You can compare visually and should compare image vectors values and "total" values
-    // If you did the sorting, check that the ids are in the same order
     for (int i = 0; i < nb_images; ++i)
     {
-        std::cout << "Image #" << images[i].to_sort.id << " total : " << images[i].to_sort.total << std::endl;
+        // If you did the sorting, check that the ids are in the same order
+        assert(to_sort[i].id == image_indices[i]);
+
+        std::string s = images[i].to_sort.id < 10 ? "0" : "";
+        std::cout << "Image #" << s << images[i].to_sort.id << " total : " << images[i].to_sort.total << std::endl;
         std::ostringstream oss;
         oss << "Image#" << images[i].to_sort.id << ".pgm";
         std::string str = oss.str();
