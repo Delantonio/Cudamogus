@@ -20,7 +20,7 @@ void fix_image_cpu(Image& to_fix)
     for (std::size_t i = 0; i < to_fix.buffer.size(); ++i)
         if (to_fix.buffer[i] != garbage_val)
             predicate[i] = 1;
-
+    
     // Compute the exclusive sum of the predicate
 
     std::exclusive_scan(predicate.begin(), predicate.end(), predicate.begin(), 0);
@@ -45,6 +45,9 @@ void fix_image_cpu(Image& to_fix)
         else if (i % 4 == 3)
             to_fix.buffer[i] -= 8;
     }
+    
+    for (int j = 0; j < 20; j++)
+        printf("after map_pixel image_data[%d] = %d\n", j, to_fix.buffer[j]);
 
     // #3 Histogram equalization
 
@@ -66,6 +69,9 @@ void fix_image_cpu(Image& to_fix)
     const int cdf_min = *first_none_zero;
 
     // Apply the map transformation of the histogram equalization
+
+    for (int j = 0; j < 20; j++)
+        printf("histogram[%d] = %d, first_non_zero = %d\n", j, histo[j], cdf_min);
 
     std::transform(to_fix.buffer.data(), to_fix.buffer.data() + image_size, to_fix.buffer.data(),
         [image_size, cdf_min, &histo](int pixel)

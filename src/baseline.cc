@@ -39,6 +39,7 @@ int cpu_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         // There are still ways to speeds this process of course (wait for last class)
         images[i] = pipeline.get_image(i);
         fix_image_cpu(images[i]);
+        //exit(0);
     }
 
     std::cout << "Done with compute, starting stats" << std::endl;
