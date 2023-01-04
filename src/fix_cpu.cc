@@ -26,7 +26,9 @@ void fix_image_cpu(Image& to_fix)
     std::exclusive_scan(predicate.begin(), predicate.end(), predicate.begin(), 0);
 
     // Scatter to the corresponding addresses
-
+    std::cout << "predicate size = " << predicate.size() << std::endl;
+    std::cout << "to_fix size = " << to_fix.buffer.size() << std::endl;
+    std::cout << "image size = " << image_size << std::endl;
     for (std::size_t i = 0; i < predicate.size(); ++i)
         if (to_fix.buffer[i] != garbage_val)
             to_fix.buffer[predicate[i]] = to_fix.buffer[i];
@@ -44,10 +46,12 @@ void fix_image_cpu(Image& to_fix)
             to_fix.buffer[i] += 3;
         else if (i % 4 == 3)
             to_fix.buffer[i] -= 8;
+        if (to_fix.buffer[i] < 0 || to_fix.buffer[i] > 255)
+            printf("map bug image_data[%d] = %d\n", i, to_fix.buffer[i]);
     }
     
-    for (int j = 0; j < 20; j++)
-        printf("after map_pixel image_data[%d] = %d\n", j, to_fix.buffer[j]);
+    //for (int j = 0; j < 20; j++)
+    //    printf("after map_pixel image_data[%d] = %d\n", j, to_fix.buffer[j]);
 
     // #3 Histogram equalization
 
@@ -56,7 +60,11 @@ void fix_image_cpu(Image& to_fix)
     std::array<int, 256> histo;
     histo.fill(0);
     for (int i = 0; i < image_size; ++i)
+    {
+        if (to_fix.buffer[i] < 0 || to_fix.buffer[i] > 255)
+            printf("histogram bug image_data[%d] = %d\n", i, to_fix.buffer[i]);
         ++histo[to_fix.buffer[i]];
+    }
 
     // Compute the inclusive sum scan of the histogram
 
@@ -68,10 +76,12 @@ void fix_image_cpu(Image& to_fix)
 
     const int cdf_min = *first_none_zero;
 
+    printf("cdf_min = %d\n", cdf_min);
+
     // Apply the map transformation of the histogram equalization
 
-    for (int j = 0; j < 20; j++)
-        printf("histogram[%d] = %d, first_non_zero = %d\n", j, histo[j], cdf_min);
+    //for (int j = 0; j < 20; j++)
+    //    printf("histogram[%d] = %d, first_non_zero = %d\n", j, histo[j], cdf_min);
 
     std::transform(to_fix.buffer.data(), to_fix.buffer.data() + image_size, to_fix.buffer.data(),
         [image_size, cdf_min, &histo](int pixel)
