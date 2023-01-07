@@ -20,7 +20,8 @@ int cpu_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 
     // -- Main loop containing image retring from pipeline and fixing
 
-    const int nb_images = pipeline.images.size();
+    //const int nb_images = pipeline.images.size();
+    const int nb_images = 1;
     std::vector<Image> images(nb_images);
 
     // - One CPU thread is launched for each image
@@ -37,9 +38,8 @@ int cpu_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         // You *must not* copy all the images and only then do the computations
         // You must get the image from the pipeline as they arrive and launch computations right away
         // There are still ways to speeds this process of course (wait for last class)
-        images[i] = pipeline.get_image(i);
+        images[i] = pipeline.get_image(14);
         fix_image_cpu(images[i]);
-        //exit(0);
     }
 
     std::cout << "Done with compute, starting stats" << std::endl;
@@ -83,7 +83,8 @@ int cpu_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
     // If you did the sorting, check that the ids are in the same order
     for (int i = 0; i < nb_images; ++i)
     {
-        std::cout << "Image #" << images[i].to_sort.id << " total : " << images[i].to_sort.total << std::endl;
+        std::string s = images[i].to_sort.id < 10 ? "0" : "";
+        std::cout << "Image #" << s <<  images[i].to_sort.id << " total : " << images[i].to_sort.total << std::endl;
         std::ostringstream oss;
         oss << "Image#" << images[i].to_sort.id << ".pgm";
         std::string str = oss.str();

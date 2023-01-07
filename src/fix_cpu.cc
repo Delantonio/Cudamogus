@@ -26,9 +26,6 @@ void fix_image_cpu(Image& to_fix)
     std::exclusive_scan(predicate.begin(), predicate.end(), predicate.begin(), 0);
 
     // Scatter to the corresponding addresses
-    std::cout << "predicate size = " << predicate.size() << std::endl;
-    std::cout << "to_fix size = " << to_fix.buffer.size() << std::endl;
-    std::cout << "image size = " << image_size << std::endl;
     for (std::size_t i = 0; i < predicate.size(); ++i)
         if (to_fix.buffer[i] != garbage_val)
             to_fix.buffer[predicate[i]] = to_fix.buffer[i];
@@ -46,8 +43,8 @@ void fix_image_cpu(Image& to_fix)
             to_fix.buffer[i] += 3;
         else if (i % 4 == 3)
             to_fix.buffer[i] -= 8;
-        if (to_fix.buffer[i] < 0 || to_fix.buffer[i] > 255)
-            printf("map bug image_data[%d] = %d\n", i, to_fix.buffer[i]);
+        // if (to_fix.buffer[i] < 0 || to_fix.buffer[i] > 255)
+        //     printf("map bug image_data[%d] = %d\n", i, to_fix.buffer[i]);
     }
     
     //for (int j = 0; j < 20; j++)
@@ -61,8 +58,8 @@ void fix_image_cpu(Image& to_fix)
     histo.fill(0);
     for (int i = 0; i < image_size; ++i)
     {
-        if (to_fix.buffer[i] < 0 || to_fix.buffer[i] > 255)
-            printf("histogram bug image_data[%d] = %d\n", i, to_fix.buffer[i]);
+        // if (to_fix.buffer[i] < 0 || to_fix.buffer[i] > 255)
+        //     printf("histogram bug image_data[%d] = %d\n", i, to_fix.buffer[i]);
         ++histo[to_fix.buffer[i]];
     }
 
@@ -76,7 +73,7 @@ void fix_image_cpu(Image& to_fix)
 
     const int cdf_min = *first_none_zero;
 
-    printf("cdf_min = %d\n", cdf_min);
+    // printf("cdf_min = %d\n", cdf_min);
 
     // Apply the map transformation of the histogram equalization
 
