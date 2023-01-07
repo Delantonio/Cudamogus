@@ -689,7 +689,8 @@ int gpu_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         fix_image_gpu(image_data, image_size, images[i].buffer.size());
 
         cudaMemcpy(images[i].buffer.data(), image_data, image_size * sizeof(int), cudaMemcpyDeviceToHost);
-        
+        cudaFree(image_data);
+
         std::cout << "Image " << images[i].to_sort.id << " fixed\n" << std::endl;
         
         std::ostringstream oss;
