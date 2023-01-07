@@ -119,7 +119,8 @@ void kernel_inclusive_scan(T* buffer, T* scan_A, T* scan_P, int* blockstates, in
         }
         
         __syncthreads();
-        buffer[i] += scan_P[blockidx];
+        int value = scan_P[blockidx];
+        buffer[i] += value;
     }
 }
 
@@ -257,7 +258,8 @@ __global__ void kernel_histogram(T *image_data, int *histogram, int image_size)
         return;
 
     int image_value = image_data[i];
-    atomicAdd(histogram + image_value, 1);
+    //atomicAdd(histogram + image_value, 1);
+    histogram[image_value] += 1;
 }
 
 template<typename T>
@@ -267,14 +269,15 @@ __global__ void kernel_filter_zeros(T* histogram, int* predicate)
     if (i >= 256)
         return;
 
-    if (histogram[i] == 0)
+    predicate[i] = histogram[i] != 0;
+    /*if (histogram[i] == 0)
     {
         predicate[i] = 0;
     }
     else
     {
         predicate[i] = 1;
-    }
+    }*/
 }
 
 template<typename T>
