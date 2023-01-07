@@ -584,6 +584,7 @@ void fix_image_gpu(int *image_data, const int image_size, const int buffer_size)
     kernel_shift<int><<<nb_blocks, blocksize>>>(shifted_predicate, predicate, buffer_size);
 
     cudaDeviceSynchronize();
+    cudaFree(predicate);
 
     int *image_data_copy;
     cudaMalloc(&image_data_copy, buffer_size * sizeof(int));
@@ -591,6 +592,7 @@ void fix_image_gpu(int *image_data, const int image_size, const int buffer_size)
     
     scatter_corresponding_adresses<int><<<nb_blocks, blocksize>>>(image_data, image_data_copy, shifted_predicate, buffer_size);
     cudaDeviceSynchronize();
+    cudaFree(shifted_predicate);
     
     apply_map_to_pixels<int><<<nb_blocks, blocksize>>>(image_data, image_size);
     cudaDeviceSynchronize();
@@ -629,15 +631,23 @@ void fix_image_gpu(int *image_data, const int image_size, const int buffer_size)
     cudaMemset(counter, 0, sizeof(int));
     kernel_inclusive_scan<int><<<1, blocksize, sizeof(int)>>>(predicate_find_first_non_zero, scan_A, scan_P, blockstates, counter, 256);
     cudaDeviceSynchronize();
+    cudaFree(scan_A);
+    cudaFree(scan_P);
+    cudaFree(blockstates);
+    cudaFree(counter);
 
     kernel_find_first_non_zero<int><<<1, blocksize>>>(histogram, predicate_find_first_non_zero, first_non_zero);
     cudaDeviceSynchronize();
+    cudaFree(histogram);
+    cudaFree(predicate_find_first_non_zero);
     
     //Apply map transformation of the histogram equalization
     cudaMemcpy(image_data_copy, image_data, sizeof(int) * buffer_size, cudaMemcpyDeviceToDevice);
 
     kernel_apply_map_transformation<int><<<nb_blocks, blocksize>>>(image_data, image_data_copy, histogram, first_non_zero, image_size);
     cudaDeviceSynchronize();
+    cudaFree(image_data_copy);
+    cudaFree(first_non_zero);
 }
 int gpu_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 {
@@ -675,8 +685,8 @@ int gpu_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         cudaMalloc(&image_data, images[i].buffer.size() * sizeof(int));
 
         cudaMemcpy(image_data, images[i].buffer.data(), images[i].buffer.size() * sizeof(int), cudaMemcpyHostToDevice);
-        fix_image_gpu_compare_cpu(image_data, images[i].buffer.data(), image_size, images[i].buffer.size());
-        //fix_image_gpu(image_data, image_size, images[i].buffer.size());
+        //fix_image_gpu_compare_cpu(image_data, images[i].buffer.data(), image_size, images[i].buffer.size());
+        fix_image_gpu(image_data, image_size, images[i].buffer.size());
 
         cudaMemcpy(images[i].buffer.data(), image_data, image_size * sizeof(int), cudaMemcpyDeviceToHost);
         
