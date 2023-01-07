@@ -258,9 +258,31 @@ __global__ void kernel_histogram(T *image_data, int *histogram, int image_size)
         return;
 
     int image_value = image_data[i];
-    //atomicAdd(histogram + image_value, 1);
-    histogram[image_value] += 1;
+    atomicAdd(histogram + image_value, 1);
+    //histogram[image_value] += 1;
 }
+
+/*
+template<typename T>
+__global__ void kernel_histogram(T *image_data, int *histogram, int image_size) // marche pas
+{
+    constexpr int hist_size = ((1 << sizeof(T) * 8));
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
+    extern __shared__ int s_histo[];
+
+    for (int i = threadIdx.x; i < hist_size; i += blockDim.x)
+        s_histo[i] = 0;
+    __syncthreads();
+
+    if (i < image_size)
+    {
+        atomicAdd(s_histo + image_data[i], 1);
+    }
+    __syncthreads();
+
+    for (int i = threadIdx.x; i < hist_size; i += blockDim.x)
+        atomicAdd(histogram + i, s_histo[i]);
+}*/
 
 template<typename T>
 __global__ void kernel_filter_zeros(T* histogram, int* predicate)
@@ -359,6 +381,7 @@ void fix_image_gpu(int *image_data, const int image_size, const int buffer_size)
     cudaMalloc(&histogram, 256 * sizeof(int));
     cudaMemset(histogram, 0, 256 * sizeof(int));
 
+    //kernel_histogram<int><<<nb_blocks, blocksize, blocksize * sizeof(int)>>>(image_data, histogram, image_size);
     kernel_histogram<int><<<nb_blocks, blocksize>>>(image_data, histogram, image_size);
     cudaDeviceSynchronize();
     
