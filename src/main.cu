@@ -405,8 +405,6 @@ void fix_image_gpu(int *image_data, const int image_size, const int buffer_size)
     cudaFree(histogram);
     cudaFree(image_data_copy);
     cudaFree(first_non_zero);
-    
-    std::cout << "Done" << std::endl;
 }
 
 int gpu_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
