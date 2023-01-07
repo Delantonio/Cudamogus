@@ -20,8 +20,8 @@ int cpu_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 
     // -- Main loop containing image retring from pipeline and fixing
 
-    //const int nb_images = pipeline.images.size();
-    const int nb_images = 1;
+    const int nb_images = pipeline.images.size();
+    // const int nb_images = 1;
     std::vector<Image> images(nb_images);
 
     // - One CPU thread is launched for each image
@@ -38,7 +38,7 @@ int cpu_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         // You *must not* copy all the images and only then do the computations
         // You must get the image from the pipeline as they arrive and launch computations right away
         // There are still ways to speeds this process of course (wait for last class)
-        images[i] = pipeline.get_image(14);
+        images[i] = pipeline.get_image(i);
         fix_image_cpu(images[i]);
     }
 
