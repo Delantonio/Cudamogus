@@ -213,6 +213,7 @@ __global__ void scatter_corresponding_adresses(T *image_data, T* image_data_back
     int garbage_value = -27;
     if (image_data_backup[i] != garbage_value)
         image_data[predicate[i]] = image_data_backup[i];
+    
 }
 
 template<typename T>
@@ -238,18 +239,6 @@ __global__ void apply_map_to_pixels(T *image_data, int image_size)
     {
         image_data[i] -= 8;
     }
-    /*if (image_data[i] < 0 || image_data[i] > 255)
-        printf("map bug image_data[%d] = %d\n", i, image_data[i]);*/
-    //if (i < 20)
-    //    printf("apply_map_pixel image_data[%d] = %d\n", i, image_data[i]);
-    /*if (i % 4 == 0)
-        atomicAdd(image_data + i, 1);//image_data[i] += 1;
-    else if (i % 4 == 1)
-        atomicAdd(image_data + i, -5);//image_data[i] -= 5;
-    else if (i % 4 == 2)
-        atomicAdd(image_data + i, 3);//image_data[i] += 3;
-    else if (i % 4 == 3)
-        atomicAdd(image_data + i, -8);//image_data[i] -= 8;*/
 }
 
 template<typename T>
@@ -259,18 +248,7 @@ __global__ void kernel_histogram(T *image_data, int *histogram, int image_size)
     if (i >= image_size)
         return;
 
-    /*if (i == 0)
-    {
-        for (int j = 0; j < 20; j++)
-        {
-            printf("kernel_histogram image_data[%d] = %d\n", j, image_data[j]);
-        }
-    }
-    
-    __syncthreads();*/
     int image_value = image_data[i];
-    /*if (image_value < 0 || image_value > 255)
-        printf("histogram bug image_data[%d] = %d\n", i, image_value);*/
     atomicAdd(histogram + image_value, 1);
 }
 
@@ -315,7 +293,7 @@ __global__ void kernel_apply_map_transformation(T *result, T *image_data, int *h
 }
 
 // Mano
-void fix_image_gpu(int *image_data, int *image_data_cpu, const int image_size, const int buffer_size)
+void fix_image_gpu_compare_cpu(int *image_data, int *image_data_cpu, const int image_size, const int buffer_size)
 {
     constexpr int blocksize = 256;
     int nb_blocks = buffer_size / blocksize;
@@ -390,10 +368,10 @@ void fix_image_gpu(int *image_data, int *image_data_cpu, const int image_size, c
         if (predicate_cpu[i] != predicate_gpu[i])
         {
             printf("scan fail predicate_cpu[%d] = %d, predicate_gpu[%d] = %d\n", i, predicate_cpu[i], i, predicate_gpu[i]);
-            /*for (int j = i - 5; j < i + 5; j++)
+            for (int j = i - 5; j < i + 5; j++)
             {
                 printf("predicate_cpu[%d] = %d, predicate_gpu[%d] = %d\n", j, predicate_cpu[j], j, predicate_gpu[j]);
-            }*/
+            }
             exit(1);
         }
     }
@@ -563,6 +541,104 @@ void fix_image_gpu(int *image_data, int *image_data_cpu, const int image_size, c
     std::cout << "Done" << std::endl;
 }
 
+void fix_image_gpu(int *image_data, const int image_size, const int buffer_size)
+{
+    constexpr int blocksize = 256;
+    int nb_blocks = buffer_size / blocksize;
+    nb_blocks++;
+
+    printf("image_size = %d, buffer_size = %d\n", image_size, buffer_size);
+
+    int *predicate;
+    cudaMalloc(&predicate, buffer_size * sizeof(int));
+    cudaMemset(predicate, 0, buffer_size * sizeof(int));
+
+    build_predicate<int><<<nb_blocks, blocksize>>>(image_data, predicate, buffer_size);
+    cudaDeviceSynchronize();
+    
+    int* scan_A;
+    cudaMalloc(&scan_A, nb_blocks * sizeof(int));
+    cudaMemset(scan_A, 0, nb_blocks * sizeof(int));
+    
+    int* scan_P;
+    cudaMalloc(&scan_P, nb_blocks * sizeof(int));
+    cudaMemset(scan_P, 0, nb_blocks * sizeof(int));
+
+    int* blockstates;
+    cudaMalloc(&blockstates, nb_blocks * sizeof(int));
+    cudaMemset(blockstates, 0, nb_blocks * sizeof(int)); // 0 = X; 1 == A; 2 == P
+
+    int* counter;
+    cudaMalloc(&counter, sizeof(int));
+    cudaMemset(counter, 0, sizeof(int));
+
+    // check if it is an exclusive scan
+    kernel_inclusive_scan<int><<<nb_blocks, blocksize, sizeof(int)>>>(predicate, scan_A, scan_P, blockstates, counter, buffer_size);
+    
+    cudaDeviceSynchronize();
+
+    int* shifted_predicate;
+    cudaMalloc(&shifted_predicate, buffer_size * sizeof(int));
+    cudaMemset(shifted_predicate, 0, buffer_size * sizeof(int));
+
+    kernel_shift<int><<<nb_blocks, blocksize>>>(shifted_predicate, predicate, buffer_size);
+
+    cudaDeviceSynchronize();
+
+    int *image_data_copy;
+    cudaMalloc(&image_data_copy, buffer_size * sizeof(int));
+    cudaMemcpy(image_data_copy, image_data, buffer_size * sizeof(int), cudaMemcpyDeviceToDevice);
+    
+    scatter_corresponding_adresses<int><<<nb_blocks, blocksize>>>(image_data, image_data_copy, shifted_predicate, buffer_size);
+    cudaDeviceSynchronize();
+    
+    apply_map_to_pixels<int><<<nb_blocks, blocksize>>>(image_data, image_size);
+    cudaDeviceSynchronize();
+    
+    // do histogram
+    int* histogram;
+    cudaMalloc(&histogram, 256 * sizeof(int));
+    cudaMemset(histogram, 0, 256 * sizeof(int));
+
+    kernel_histogram<int><<<nb_blocks, blocksize>>>(image_data, histogram, image_size);
+    cudaDeviceSynchronize();
+    
+    // do inclusive scan
+    cudaMemset(scan_A, 0, nb_blocks * sizeof(int));
+    cudaMemset(scan_P, 0, nb_blocks * sizeof(int));
+    cudaMemset(blockstates, 0, nb_blocks * sizeof(int));
+    cudaMemset(counter, 0, sizeof(int));
+    kernel_inclusive_scan<int><<<1, blocksize, sizeof(int)>>>(histogram, scan_A, scan_P, blockstates, counter, 256);
+    cudaDeviceSynchronize();
+    
+    //find first non zero
+    int* first_non_zero;
+    cudaMalloc(&first_non_zero, sizeof(int));
+    cudaMemset(first_non_zero, 0, sizeof(int));
+
+    int *predicate_find_first_non_zero;
+    cudaMalloc(&predicate_find_first_non_zero, 256 * sizeof(int));
+    cudaMemset(predicate_find_first_non_zero, 0, 256 * sizeof(int));
+
+    kernel_filter_zeros<int><<<1, blocksize>>>(histogram, predicate_find_first_non_zero);
+    cudaDeviceSynchronize();
+
+    cudaMemset(scan_A, 0, nb_blocks * sizeof(int));
+    cudaMemset(scan_P, 0, nb_blocks * sizeof(int));
+    cudaMemset(blockstates, 0, nb_blocks * sizeof(int));
+    cudaMemset(counter, 0, sizeof(int));
+    kernel_inclusive_scan<int><<<1, blocksize, sizeof(int)>>>(predicate_find_first_non_zero, scan_A, scan_P, blockstates, counter, 256);
+    cudaDeviceSynchronize();
+
+    kernel_find_first_non_zero<int><<<1, blocksize>>>(histogram, predicate_find_first_non_zero, first_non_zero);
+    cudaDeviceSynchronize();
+    
+    //Apply map transformation of the histogram equalization
+    cudaMemcpy(image_data_copy, image_data, sizeof(int) * buffer_size, cudaMemcpyDeviceToDevice);
+
+    kernel_apply_map_transformation<int><<<nb_blocks, blocksize>>>(image_data, image_data_copy, histogram, first_non_zero, image_size);
+    cudaDeviceSynchronize();
+}
 int gpu_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 {
     // -- Pipeline initialization
@@ -593,36 +669,23 @@ int gpu_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
     for (int i = 0; i < nb_images; ++i)
     {
         images[i] = pipeline.get_image(i);
-        std::cout << "Image " << i << " loaded " << images[i].to_sort.id << std::endl;
+        std::cout << "Image " << images[i].to_sort.id << " loaded" << std::endl;
         int *image_data;
         int image_size = images[i].width * images[i].height;
         cudaMalloc(&image_data, images[i].buffer.size() * sizeof(int));
 
         cudaMemcpy(image_data, images[i].buffer.data(), images[i].buffer.size() * sizeof(int), cudaMemcpyHostToDevice);
-        fix_image_gpu(image_data, images[i].buffer.data(), image_size, images[i].buffer.size());
-
-        std::cout << "Image " << i << " fixed " << images[i].to_sort.id << std::endl;
+        fix_image_gpu_compare_cpu(image_data, images[i].buffer.data(), image_size, images[i].buffer.size());
+        //fix_image_gpu(image_data, image_size, images[i].buffer.size());
 
         cudaMemcpy(images[i].buffer.data(), image_data, image_size * sizeof(int), cudaMemcpyDeviceToHost);
         
-        // for (int j = 50; j < image_size; j++)
-        // {
-        //     if (j == 80)
-        //         break;
-        //     std::cout << "DEBUG: image_data[" << j << "] = " << images[i].buffer[j] << std::endl;
-        //     if (images[i].buffer[j] < 0 || images[i].buffer[j] > 255)
-        //     {
-        //         std::cout << "ERROR at "<< j << " : " << images[i].buffer[j] << " image_size: " << image_size << std::endl;
-        //     }
-        // }
-
-        std::cout << "Image " << i << " copied " << images[i].to_sort.id << std::endl;
+        std::cout << "Image " << images[i].to_sort.id << " fixed\n" << std::endl;
         
         std::ostringstream oss;
         oss << "ImageGPU#" << images[i].to_sort.id << ".pgm";
         std::string str = oss.str();
         images[i].write(str);
-        std::cout << "Image " << i << " written" << std::endl;
     }
 
     return 0;
