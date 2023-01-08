@@ -206,7 +206,34 @@ __global__ void apply_map_to_pixels(T *image_data, int image_size)
     }
 }
 
-template <typename T>
+template<typename T>
+__global__ void kernel_histo(T *image_data, int *histo, int N)
+{
+    // constexpr int hist_size  = ((1 << sizeof(T) * 8));
+    constexpr int hist_size  = 256;
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i >= N)
+        return;
+    extern __shared__ int s_histo[];
+
+    // Block-loop pattern
+    for (int i = threadIdx.x; i < hist_size; i += blockDim.x)
+        s_histo[i] = 0;
+    __syncthreads();
+
+    if (i < N)
+    {
+        int image_value = image_data[i];
+        atomicAdd(s_histo + image_value, 1);
+    }
+    __syncthreads();
+
+    for (int i = threadIdx.x; i < hist_size; i += blockDim.x)
+        atomicAdd(histo + i, s_histo[i]);
+}
+
+/*
+template<typename T>
 __global__ void kernel_histogram(T *image_data, int *histogram, int image_size)
 {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
@@ -215,47 +242,18 @@ __global__ void kernel_histogram(T *image_data, int *histogram, int image_size)
 
     int image_value = image_data[i];
     atomicAdd(histogram + image_value, 1);
-    // histogram[image_value] += 1;
-}
-
-/*
-template<typename T>
-__global__ void kernel_histogram(T *image_data, int *histogram, int image_size) // marche pas
-{
-    constexpr int hist_size = ((1 << sizeof(T) * 8));
-    int i = threadIdx.x + blockIdx.x * blockDim.x;
-    extern __shared__ int s_histo[];
-
-    for (int i = threadIdx.x; i < hist_size; i += blockDim.x)
-        s_histo[i] = 0;
-    __syncthreads();
-
-    if (i < image_size)
-    {
-        atomicAdd(s_histo + image_data[i], 1);
-    }
-    __syncthreads();
-
-    for (int i = threadIdx.x; i < hist_size; i += blockDim.x)
-        atomicAdd(histogram + i, s_histo[i]);
+    //histogram[image_value] += 1;
 }*/
 
-template <typename T>
-__global__ void kernel_filter_zeros(T *histogram, int *predicate)
+
+template<typename T>
+__global__ void kernel_filter_zeros(T* histogram, int* predicate)
 {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
     if (i >= 256)
         return;
 
     predicate[i] = histogram[i] != 0;
-    /*if (histogram[i] == 0)
-    {
-        predicate[i] = 0;
-    }
-    else
-    {
-        predicate[i] = 1;
-    }*/
 }
 
 template <typename T>
@@ -337,8 +335,8 @@ void fix_image_gpu(int *image_data, const int image_size, const int buffer_size)
     cudaMalloc(&histogram, 256 * sizeof(int));
     cudaMemset(histogram, 0, 256 * sizeof(int));
 
-    // kernel_histogram<int><<<nb_blocks, blocksize, blocksize * sizeof(int)>>>(image_data, histogram, image_size);
-    kernel_histogram<int><<<nb_blocks, blocksize>>>(image_data, histogram, image_size);
+    // kernel_histogram<int><<<nb_blocks, blocksize>>>(image_data, histogram, image_size);
+    kernel_histo<int><<<nb_blocks, blocksize, blocksize * sizeof(int)>>>(image_data, histogram, image_size);
     cudaDeviceSynchronize();
 
     // do inclusive scan
@@ -503,10 +501,10 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[])
         // std::cout << "cub version : " << std::endl;
         // cub_main(argc, argv);
     }
-
-    std::cout << "cpu main" << std::endl;
-    cpu_main(argc, argv);
-
+    
+    // std::cout << "cpu main" << std::endl;
+    // cpu_main(argc, argv);
+    
     std::cout << "gpu main" << std::endl;
     gpu_main(argc, argv);
 
