@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cuda_runtime.h>
+
 #define cudaCheckError()                                             \
     {                                                                \
         cudaError_t e = cudaGetLastError();                          \
@@ -25,6 +27,14 @@ public:
         cudaCheckError();
     }
 
+    CudaArray1D(size_t size, T val)
+        : size_(size)
+    {
+        cudaMalloc(&data_, size_ * sizeof(T));
+        cudaMemset(data_, val, size_ * sizeof(T));
+        cudaCheckError();
+    }
+
     CudaArray1D(size_t size, T *array_host)
         : CudaArray1D(size)
     {
@@ -38,6 +48,18 @@ public:
         if (has_been_freed)
             return;
         free();
+    }
+
+    void copy_from(const T* other, cudaMemcpyKind kind)
+    {
+        cudaMemcpy(data_, other, size_ * sizeof(T), kind);
+        cudaCheckError();
+    }
+
+    void copy_to(T* other, cudaMemcpyKind kind) const
+    {
+        cudaMemcpy(other, data_, size_ * sizeof(T), kind);
+        cudaCheckError();
     }
 
     void free()

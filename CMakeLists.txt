@@ -25,7 +25,14 @@ set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
 set(CMAKE_CUDA_FLAGS "-Xcompiler -fopenmp --extended-lambda --generate-line-info --expt-relaxed-constexpr ${CMAKE_CUDA_FLAGS}")
 #set(CMAKE_CUDA_FLAGS "--ptxas-options=-v --generate-line-info")
 
-add_executable(main src/main.cu src/cub_version.cu src/baseline.cc src/fix_cpu.cc)
+add_executable(
+    main
+    src/main.cc
+    src/cub_version.cu
+    src/fix_cpu.cc
+    src/fix_gpu.cu
+    src/kernels.cu
+)
 
 target_link_libraries(main PUBLIC OpenMP::OpenMP_CXX)
 
