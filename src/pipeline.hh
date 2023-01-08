@@ -22,7 +22,7 @@ struct Pipeline
     {
         images = std::vector<Image>(filepaths.size());
         #pragma omp parallel for
-        for (std::size_t i = 0; i < filepaths.size(); ++i)
+        for (int i = 0; i < filepaths.size(); ++i)
         {
             const int image_id = std::stoi(get_number(filepaths[i]));
             images[i] = Image(filepaths[i], image_id);

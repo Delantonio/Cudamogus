@@ -25,8 +25,8 @@ public:
         cudaCheckError();
     }
 
-    CudaArray1D(size_t size_, T *array_host)
-        : CudaArray1D(size_)
+    CudaArray1D(size_t size, T *array_host)
+        : CudaArray1D(size)
     {
         cudaMemcpy(data_, array_host, size_ * sizeof(T),
                    cudaMemcpyHostToDevice);
@@ -55,7 +55,7 @@ public:
         T *res = new T[size_];
 
         cudaMemcpy(res, data_, size_ * sizeof(T), cudaMemcpyDeviceToHost);
-
+        cudaCheckError();
         return res;
     }
 
