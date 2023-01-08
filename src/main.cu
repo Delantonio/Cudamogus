@@ -76,6 +76,8 @@ __global__ void kernel_inclusive_scan(T *buffer, T *scan_A, T *scan_P, int *bloc
         else
             atomicAdd(scan_A + blockidx, buffer[last_index]);
 
+        __threadfence_system();
+
         blockstates[blockidx] = 1 + (blockidx == 0);
     }
 
