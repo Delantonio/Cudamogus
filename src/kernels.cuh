@@ -1,4 +1,5 @@
 #pragma once
+#include <stdio.h>
 
 __global__ void kernel_shift(int *result, int *buffer, int size);
 

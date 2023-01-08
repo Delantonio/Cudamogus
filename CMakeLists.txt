@@ -27,7 +27,7 @@ set(CMAKE_CUDA_FLAGS "-Xcompiler -fopenmp --extended-lambda --generate-line-info
 
 add_executable(
     main
-    src/main.cc
+    src/main.cu
     src/cub_version.cu
     src/fix_cpu.cc
     src/fix_gpu.cu
