@@ -23,39 +23,32 @@ void fix_image(Image &to_fix)
 
     constexpr int garbage_val = -27;
 
-    int *d_in;
-    cudaMalloc(&d_in, to_fix.buffer.size() * sizeof(int));
-    cudaMemcpy(d_in, to_fix.buffer.data(), to_fix.buffer.size() * sizeof(int),
-               cudaMemcpyHostToDevice);
+    CudaArray1D<int> d_in(to_fix.buffer.size());
+    d_in.copy_from(to_fix.buffer.data(), cudaMemcpyHostToDevice);
 
-    int *d_image_buffer_fixed;
-    cudaMalloc(&d_image_buffer_fixed, image_size * sizeof(int));
-
-    int *d_num_selected_out;
-    cudaMalloc(&d_num_selected_out, sizeof(int));
+    CudaArray1D<int> d_image_buffer_fixed(image_size);
+    CudaArray1D<int> d_num_selected_out(1);
 
     NotEqual is_not_garbage(garbage_val);
 
     void *d_temp_storage = NULL;
     size_t temp_storage_bytes = 0;
-    cub::DeviceSelect::If(d_temp_storage, temp_storage_bytes, d_in, d_image_buffer_fixed,
-                          d_num_selected_out, to_fix.buffer.size(), is_not_garbage);
+    cub::DeviceSelect::If(d_temp_storage, temp_storage_bytes, d_in.data_, d_image_buffer_fixed.data_,
+                          d_num_selected_out.data_, to_fix.buffer.size(), is_not_garbage);
     cudaMalloc(&d_temp_storage, temp_storage_bytes);
-    cub::DeviceSelect::If(d_temp_storage, temp_storage_bytes, d_in, d_image_buffer_fixed,
-                          d_num_selected_out, to_fix.buffer.size(), is_not_garbage);
+    cub::DeviceSelect::If(d_temp_storage, temp_storage_bytes, d_in.data_, d_image_buffer_fixed.data_,
+                          d_num_selected_out.data_, to_fix.buffer.size(), is_not_garbage);
     cudaDeviceSynchronize();
 
     // num_selected_out is the number of elements that are not garbage, so it should be image_size
     int num_selected_out;
-    cudaMemcpy(&num_selected_out, d_num_selected_out, sizeof(int),
-               cudaMemcpyDeviceToHost);
+    d_num_selected_out.copy_to(&num_selected_out, cudaMemcpyDeviceToHost);
     to_fix.buffer.resize(num_selected_out);
-    cudaMemcpy(to_fix.buffer.data(), d_image_buffer_fixed, num_selected_out * sizeof(int),
-               cudaMemcpyDeviceToHost);
+    d_image_buffer_fixed.copy_to(to_fix.buffer.data(), cudaMemcpyDeviceToHost);
 
-    cudaFree(d_in);
-    cudaFree(d_image_buffer_fixed);
-    cudaFree(d_num_selected_out);
+    d_in.free();
+    d_image_buffer_fixed.free();
+    d_num_selected_out.free();
     cudaFree(d_temp_storage);
 
     // #2 Apply map to fix pixels
@@ -78,51 +71,45 @@ void fix_image(Image &to_fix)
 
     std::array<int, 256> histo;
 
-    int *d_samples;
-    cudaMalloc(&d_samples, image_size * sizeof(int));
-    cudaMemcpy(d_samples, to_fix.buffer.data(), image_size * sizeof(int),
-               cudaMemcpyHostToDevice);
+    CudaArray1D<int> d_samples(image_size);
+    d_samples.copy_from(to_fix.buffer.data(), cudaMemcpyHostToDevice);
 
-    int *d_histo;
-    cudaMalloc(&d_histo, 256 * sizeof(int));
-    cudaMemset(d_histo, 0, 256 * sizeof(int));
+    CudaArray1D<int> d_histo(256, 0);
 
     void *d_temp_storage_histo = NULL;
     size_t temp_storage_bytes_histo = 0;
     cub::DeviceHistogram::HistogramEven(d_temp_storage_histo, temp_storage_bytes_histo,
-                                        d_samples, d_histo, 257, 0, 256, image_size);
+                                        d_samples.data_, d_histo.data_, 257, 0, 256, image_size);
     cudaMalloc(&d_temp_storage_histo, temp_storage_bytes_histo);
     cub::DeviceHistogram::HistogramEven(d_temp_storage_histo, temp_storage_bytes_histo,
-                                        d_samples, d_histo, 257, 0, 256, image_size);
+                                        d_samples.data_, d_histo.data_, 257, 0, 256, image_size);
     cudaDeviceSynchronize();
 
-    cudaFree(d_samples);
+    d_samples.free();
     cudaFree(d_temp_storage_histo);
 
     // Computed d_histo is reused in the next step so no need to copy it back to host nor free it
 
     // Compute the inclusive sum scan of the histogram
 
-    int *d_is_scan; // inclusive sum scan
-    cudaMalloc(&d_is_scan, 256 * sizeof(int));
+    CudaArray1D<int> d_is_scan(256);
 
     void *d_is_temp_storage = NULL;
     size_t is_temp_storage_bytes = 0;
-    cub::DeviceScan::InclusiveSum(d_is_temp_storage, is_temp_storage_bytes, d_histo,
-                                  d_is_scan, 256);
+    cub::DeviceScan::InclusiveSum(d_is_temp_storage, is_temp_storage_bytes, d_histo.data_,
+                                  d_is_scan.data_, 256);
     cudaMalloc(&d_is_temp_storage, is_temp_storage_bytes);
-    cub::DeviceScan::InclusiveSum(d_is_temp_storage, is_temp_storage_bytes, d_histo,
-                                  d_is_scan, 256);
+    cub::DeviceScan::InclusiveSum(d_is_temp_storage, is_temp_storage_bytes, d_histo.data_,
+                                  d_is_scan.data_, 256);
 
     cudaDeviceSynchronize();
 
-    cudaMemcpy(histo.data(), d_is_scan, 256 * sizeof(int),
-               cudaMemcpyDeviceToHost);
+    d_is_scan.copy_to(histo.data(), cudaMemcpyDeviceToHost);
 
-    cudaFree(d_is_scan);
+    d_is_scan.free();
     cudaFree(d_is_temp_storage);
 
-    cudaFree(d_histo);
+    d_histo.free();
 
     // Find the first non-zero value in the cumulative histogram
 
@@ -146,7 +133,6 @@ int cub_main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[], Pipeline 
     // -- Main loop containing image retring from pipeline and fixing
 
     const int nb_images = pipeline.images.size();
-    // const int nb_images = 1;
     std::vector<Image> images(nb_images);
 
     // - One CPU thread is launched for each image
@@ -176,29 +162,26 @@ int cub_main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[], Pipeline 
     {
         auto &image = images[i];
         const int image_size = image.width * image.height;
-        // image.to_sort.total = std::reduce(image.buffer.cbegin(), image.buffer.cbegin() + image_size, 0);
 
-        int *d_image;
-        cudaMalloc(&d_image, image_size * sizeof(int));
-        cudaMemcpy(d_image, image.buffer.data(), image_size * sizeof(int), cudaMemcpyHostToDevice);
+        CudaArray1D<int> d_image(image_size);
+        d_image.copy_from(image.buffer.data(), cudaMemcpyHostToDevice);
 
-        int *d_reduce;
-        cudaMalloc(&d_reduce, image_size * sizeof(int));
+        CudaArray1D<int> d_reduce(1);
 
         void *d_temp_storage = NULL;
         size_t temp_storage_bytes = 0;
         cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes,
-                               d_image, d_reduce, image_size);
+                               d_image.data_, d_reduce.data_, image_size);
         cudaMalloc(&d_temp_storage, temp_storage_bytes);
         cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes,
-                               d_image, d_reduce, image_size);
+                               d_image.data_, d_reduce.data_, image_size);
 
         cudaDeviceSynchronize();
 
-        cudaMemcpy(&image.to_sort.total, d_reduce, sizeof(int), cudaMemcpyDeviceToHost);
+        d_reduce.copy_to((int*)&image.to_sort.total, cudaMemcpyDeviceToHost);
 
-        cudaFree(d_image);
-        cudaFree(d_reduce);
+        d_image.free();
+        d_reduce.free();
         cudaFree(d_temp_storage);
     }
 
@@ -213,46 +196,34 @@ int cub_main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[], Pipeline 
     std::transform(images.cbegin(), images.cend(), image_indices.begin(), [](const auto &image)
                    { return image.to_sort.id; });
 
-    // #pragma omp parallel for
-    // for(int i = 0; i < nb_images; i++)
-    // {
-    //     image_indices[i] = to_sort[i].id;
-    //     image_totals[i] = to_sort[i].total;
-    // }
+    CudaArray1D<int> d_keys_in(nb_images);
+    CudaArray1D<int> d_keys_out(nb_images);
+    CudaArray1D<int> d_values_in(nb_images);
+    CudaArray1D<int> d_values_out(nb_images);
 
-    int *d_keys_in;
-    int *d_keys_out;
-    int *d_values_in;
-    int *d_values_out;
-
-    cudaMalloc(&d_keys_in, nb_images * sizeof(int));
-    cudaMalloc(&d_keys_out, nb_images * sizeof(int));
-    cudaMalloc(&d_values_in, nb_images * sizeof(int));
-    cudaMalloc(&d_values_out, nb_images * sizeof(int));
-
-    cudaMemcpy(d_keys_in, image_totals.data(), nb_images * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_values_in, image_indices.data(), nb_images * sizeof(Image), cudaMemcpyHostToDevice);
+    d_keys_in.copy_from(image_totals.data(), cudaMemcpyHostToDevice);
+    d_values_in.copy_from(image_indices.data(), cudaMemcpyHostToDevice);
 
     void *d_temp_storage = NULL;
     size_t temp_storage_bytes = 0;
     cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes,
-                                    d_keys_in, d_keys_out,
-                                    d_values_in, d_values_out,
+                                    d_keys_in.data_, d_keys_out.data_,
+                                    d_values_in.data_, d_values_out.data_,
                                     nb_images);
     cudaMalloc(&d_temp_storage, temp_storage_bytes);
     cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes,
-                                    d_keys_in, d_keys_out,
-                                    d_values_in, d_values_out,
+                                    d_keys_in.data_, d_keys_out.data_,
+                                    d_values_in.data_, d_values_out.data_,
                                     nb_images);
     cudaDeviceSynchronize();
 
-    cudaMemcpy(image_totals.data(), d_keys_out, nb_images * sizeof(int), cudaMemcpyDeviceToHost);
-    cudaMemcpy(image_indices.data(), d_values_out, nb_images * sizeof(Image), cudaMemcpyDeviceToHost);
+    d_keys_out.copy_to(image_totals.data(), cudaMemcpyDeviceToHost);
+    d_values_out.copy_to(image_indices.data(), cudaMemcpyDeviceToHost);
 
-    cudaFree(d_keys_in);
-    cudaFree(d_keys_out);
-    cudaFree(d_values_in);
-    cudaFree(d_values_out);
+    d_keys_in.free();
+    d_keys_out.free();
+    d_values_in.free();
+    d_values_out.free();
     cudaFree(d_temp_storage);
 
     // // - Print sorted images
