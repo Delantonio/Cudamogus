@@ -10,6 +10,6 @@
 #include <filesystem>
 #include <numeric>
 
-int cpu_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[]);
+int cpu_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[], Pipeline &pipeline);
 
 void fix_image_cpu(Image& to_fix);

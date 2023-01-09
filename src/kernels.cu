@@ -110,13 +110,14 @@ __global__ void kernel_reduce(const int *__restrict__ buffer, int *__restrict__ 
     unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
 
     int val = 0;
-    while (i < size)
+    if (i < size)
     {
-        val += buffer[i];
-        i += blockDim.x * gridDim.x;
+        const int4 arr = reinterpret_cast<const int4*>(buffer)[i];
+        val += arr.x + arr.y + arr.z + arr.w;
+        i += blockDim.x * gridDim.x; 
     }
-    if (blockIdx.x * (blockDim.x * 2) + threadIdx.x < size)
-        val = warp_reduce(val);
+
+    val = warp_reduce(val);
 
     if (threadIdx.x % warpSize == 0)
         atomicAdd(total, val);
@@ -136,55 +137,44 @@ __global__ void print_debug(int *image_data, int size)
 __global__ void build_predicate(int *image_data, int *predicate, int image_size)
 {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
-    if (i >= image_size)
-        return;
 
-    int garbage_value = -27;
-    predicate[i] += (image_data[i] != garbage_value);
+    if (i < image_size)
+    {
+        constexpr int garbage_value = -27;
+        predicate[i] += (image_data[i] != garbage_value);
+    }
 }
 
 __global__ void scatter_corresponding_adresses(int *image_data, int *image_data_backup, int *predicate, int image_size)
 {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
-    if (i >= image_size)
-        return;
 
-    int garbage_value = -27;
-    if (image_data_backup[i] != garbage_value)
-        image_data[predicate[i]] = image_data_backup[i];
+    if (i < image_size)
+    {
+        constexpr int garbage_value = -27;
+        if (image_data_backup[i] != garbage_value)
+            image_data[predicate[i]] = image_data_backup[i];
+    }
 }
+
+__device__ __constant__ int val[4] = {1, -5, 3, -8};
 
 __global__ void apply_map_to_pixels(int *image_data, int image_size)
 {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
-    if (i >= image_size)
-        return;
 
-    if (i % 4 == 0)
+    if (i < image_size)
     {
-        image_data[i] += 1;
-    }
-    else if (i % 4 == 1)
-    {
-        image_data[i] -= 5;
-    }
-    else if (i % 4 == 2)
-    {
-        image_data[i] += 3;
-    }
-    else if (i % 4 == 3)
-    {
-        image_data[i] -= 8;
+        image_data[i] += val[i % 4];
     }
 }
 
 __global__ void kernel_histo(int *image_data, int *histo, int N)
 {
     constexpr int hist_size = 256;
-    int i = threadIdx.x + blockIdx.x * blockDim.x;
-    if (i >= N)
-        return;
     extern __shared__ int s_histo[];
+
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
 
     // Block-loop pattern
     for (int i = threadIdx.x; i < hist_size; i += blockDim.x)
@@ -205,19 +195,16 @@ __global__ void kernel_histo(int *image_data, int *histo, int N)
 __global__ void kernel_filter_zeros(int *histogram, int *predicate)
 {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
-    if (i >= 256)
-        return;
 
-    predicate[i] = histogram[i] != 0;
+    if (i < 256)
+        predicate[i] = histogram[i] != 0;
 }
 
 __global__ void kernel_find_first_non_zero(int *histogram, int *summed_predicate, int *first_non_zero)
 {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
-    if (i >= 256)
-        return;
 
-    if (summed_predicate[i] == 1)
+    if (i < 256 && summed_predicate[i] == 1)
     {
         *first_non_zero = histogram[i];
     }
@@ -226,7 +213,7 @@ __global__ void kernel_find_first_non_zero(int *histogram, int *summed_predicate
 __global__ void kernel_apply_map_transformation(int *result, int *image_data, int *histogram, int *first_non_zero, int image_size)
 {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
-    if (i >= image_size)
-        return;
-    result[i] = std::roundf(((histogram[image_data[i]] - *first_non_zero) / static_cast<float>(image_size - *first_non_zero)) * 255.0f);
+
+    if (i < image_size)
+        result[i] = std::roundf(((histogram[image_data[i]] - *first_non_zero) / static_cast<float>(image_size - *first_non_zero)) * 255.0f);
 }

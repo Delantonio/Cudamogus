@@ -5,32 +5,16 @@
 #include <algorithm>
 
 #include "kernels.cuh"
-#include "pipeline.hh"
 
 
-int gpu_main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[])
+int gpu_main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[], Pipeline &pipeline)
 {
-    // -- Pipeline initialization
-
-    std::cout << "File loading..." << std::endl;
-
-    // - Get file paths
-
-    using recursive_directory_iterator = std::filesystem::recursive_directory_iterator;
-    std::vector<std::string> filepaths;
-    for (const auto &dir_entry : recursive_directory_iterator("../images"))
-        filepaths.emplace_back(dir_entry.path().string());
-
-    // - Init pipeline object
-
-    Pipeline pipeline(filepaths);
-
     // -- Main loop containing image retring from pipeline and fixing
 
     const int nb_images = (int)pipeline.images.size();
     std::vector<Image> images(nb_images);
 
-    std::cout << "Done, starting compute" << std::endl;
+    std::cout << "Starting compute" << std::endl;
 
 #pragma omp parallel for
     for (int i = 0; i < nb_images; ++i)
@@ -55,18 +39,19 @@ int gpu_main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[])
 
 void fix_image_gpu(CudaArray1D<int> &image_data, const int image_size, const int buffer_size)
 {
-    constexpr int blocksize = 256;
-    int nb_blocks = buffer_size / blocksize;
-    nb_blocks++;
+    int blocksize = 768;
+    int nb_blocks = (buffer_size + blocksize - 1) / blocksize;
+    int blocks_allocated = nb_blocks;
 
     CudaArray1D<int> predicate(buffer_size, 0);
 
     build_predicate<<<nb_blocks, blocksize>>>(image_data.data_, predicate.data_, buffer_size);
     cudaDeviceSynchronize();
+    cudaCheckError();
 
-    CudaArray1D<int> scan_A(nb_blocks, 0);
-    CudaArray1D<int> scan_P(nb_blocks, 0);
-    CudaArray1D<int> blockstates(nb_blocks, 0); // 0 = X; 1 == A; 2 == P
+    CudaArray1D<int> scan_A(blocks_allocated, 0);
+    CudaArray1D<int> scan_P(blocks_allocated, 0);
+    CudaArray1D<int> blockstates(blocks_allocated, 0); // 0 = X; 1 == A; 2 == P
     CudaArray1D<int> counter(1, 0);
 
     kernel_inclusive_scan<<<nb_blocks, blocksize, sizeof(int)>>>(predicate.data_, scan_A.data_, scan_P.data_, blockstates.data_, counter.data_, buffer_size);
@@ -78,6 +63,7 @@ void fix_image_gpu(CudaArray1D<int> &image_data, const int image_size, const int
     cudaDeviceSynchronize();
 
     predicate.free();
+    cudaCheckError();
 
     CudaArray1D<int> image_data_copy(buffer_size);
     image_data_copy.copy_from(image_data.data_, cudaMemcpyDeviceToDevice);
@@ -87,24 +73,30 @@ void fix_image_gpu(CudaArray1D<int> &image_data, const int image_size, const int
 
     shifted_predicate.free();
 
+    blocksize = 256;
+    nb_blocks = (image_size + blocksize - 1) / blocksize;
+
     apply_map_to_pixels<<<nb_blocks, blocksize>>>(image_data.data_, image_size);
     cudaDeviceSynchronize();
 
     // do histogram
     CudaArray1D<int> histogram(256, 0);
+    cudaCheckError();
 
-    // kernel_histogram<int><<<nb_blocks, blocksize>>>(image_data, histogram, image_size);
+    blocksize = 512;
+    nb_blocks = (image_size + blocksize - 1) / blocksize;
+
     kernel_histo<<<nb_blocks, blocksize, blocksize * sizeof(int)>>>(image_data.data_, histogram.data_, image_size);
     cudaDeviceSynchronize();
 
     // do inclusive scan
-    cudaMemset(scan_A.data_, 0, nb_blocks * sizeof(int));
-    cudaMemset(scan_P.data_, 0, nb_blocks * sizeof(int));
-    cudaMemset(blockstates.data_, 0, nb_blocks * sizeof(int));
+    cudaMemset(scan_A.data_, 0, blocks_allocated * sizeof(int));
+    cudaMemset(scan_P.data_, 0, blocks_allocated * sizeof(int));
+    cudaMemset(blockstates.data_, 0, blocks_allocated * sizeof(int));
     cudaMemset(counter.data_, 0, sizeof(int));
     cudaCheckError();
 
-    kernel_inclusive_scan<<<1, blocksize, sizeof(int)>>>(histogram.data_, scan_A.data_, scan_P.data_, blockstates.data_, counter.data_, 256);
+    kernel_inclusive_scan<<<1, 256, sizeof(int)>>>(histogram.data_, scan_A.data_, scan_P.data_, blockstates.data_, counter.data_, 256);
     cudaDeviceSynchronize();
 
     // find first non zero
@@ -112,15 +104,15 @@ void fix_image_gpu(CudaArray1D<int> &image_data, const int image_size, const int
 
     CudaArray1D<int> predicate_find_first_non_zero(256, 0);
 
-    kernel_filter_zeros<<<1, blocksize>>>(histogram.data_, predicate_find_first_non_zero.data_);
+    kernel_filter_zeros<<<1, 256>>>(histogram.data_, predicate_find_first_non_zero.data_);
     cudaDeviceSynchronize();
 
-    cudaMemset(scan_A.data_, 0, nb_blocks * sizeof(int));
-    cudaMemset(scan_P.data_, 0, nb_blocks * sizeof(int));
-    cudaMemset(blockstates.data_, 0, nb_blocks * sizeof(int));
+    cudaMemset(scan_A.data_, 0, blocks_allocated * sizeof(int));
+    cudaMemset(scan_P.data_, 0, blocks_allocated * sizeof(int));
+    cudaMemset(blockstates.data_, 0, blocks_allocated * sizeof(int));
     cudaMemset(counter.data_, 0, sizeof(int));
 
-    kernel_inclusive_scan<<<1, blocksize, sizeof(int)>>>(predicate_find_first_non_zero.data_, scan_A.data_, scan_P.data_, blockstates.data_, counter.data_, 256);
+    kernel_inclusive_scan<<<1, 256, sizeof(int)>>>(predicate_find_first_non_zero.data_, scan_A.data_, scan_P.data_, blockstates.data_, counter.data_, 256);
     cudaDeviceSynchronize();
 
     scan_A.free();
@@ -128,12 +120,15 @@ void fix_image_gpu(CudaArray1D<int> &image_data, const int image_size, const int
     blockstates.free();
     counter.free();
 
-    kernel_find_first_non_zero<<<1, blocksize>>>(histogram.data_, predicate_find_first_non_zero.data_, first_non_zero.data_);
+    kernel_find_first_non_zero<<<1, 256>>>(histogram.data_, predicate_find_first_non_zero.data_, first_non_zero.data_);
     cudaDeviceSynchronize();
     predicate_find_first_non_zero.free();
 
     // Apply map transformation of the histogram equalization
     image_data_copy.copy_from(image_data.data_, cudaMemcpyDeviceToDevice);
+
+    blocksize = 256;
+    nb_blocks = (image_size + blocksize - 1) / blocksize;
 
     kernel_apply_map_transformation<<<nb_blocks, blocksize>>>(image_data.data_, image_data_copy.data_, histogram.data_, first_non_zero.data_, image_size);
     cudaDeviceSynchronize();
@@ -155,11 +150,11 @@ void compute_statistics(std::vector<Image> &images)
         CudaArray1D<int> d_image(image_size);
         d_image.copy_from(image.buffer.data(), cudaMemcpyHostToDevice);
 
-        constexpr int blocksize = 512;
         // Nb Blocks is not fixed : it should absolutely be modified and benchmarked to get the best performance
-        const int nb_blocks = (image_size + blocksize - 1) / (blocksize);
+        const int blocksize = 768;
+        const int nb_blocks = (image_size + blocksize - 1) / (blocksize * 4);
 
-        kernel_reduce<<<nb_blocks / 4, blocksize>>>(d_image.data_, d_reduce.data_, image_size);
+        kernel_reduce<<<nb_blocks, blocksize>>>(d_image.data_, d_reduce.data_, image_size / 4);
         cudaDeviceSynchronize();
 
         d_reduce.copy_to((int *)&image.to_sort.total, cudaMemcpyDeviceToHost);

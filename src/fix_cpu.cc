@@ -8,23 +8,8 @@
 #include "image.hh"
 
 // Given Main
-int cpu_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
+int cpu_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[], Pipeline &pipeline)
 {
-    // -- Pipeline initialization
-
-    std::cout << "File loading..." << std::endl;
-
-    // - Get file paths
-
-    using recursive_directory_iterator = std::filesystem::recursive_directory_iterator;
-    std::vector<std::string> filepaths;
-    for (const auto& dir_entry : recursive_directory_iterator("../images"))
-        filepaths.emplace_back(dir_entry.path().string());
-
-    // - Init pipeline object
-
-    Pipeline pipeline(filepaths);
-
     // -- Main loop containing image retring from pipeline and fixing
 
     const int nb_images = pipeline.images.size();
@@ -33,7 +18,7 @@ int cpu_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 
     // - One CPU thread is launched for each image
 
-    std::cout << "Done, starting compute" << std::endl;
+    std::cout << "Starting compute" << std::endl;
 
     #pragma omp parallel for
     for (int i = 0; i < nb_images; ++i)
