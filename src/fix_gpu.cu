@@ -163,8 +163,8 @@ void compute_statistics(std::vector<Image> &images)
         const int image_size = image.width * image.height;
 
         CudaArray1D<int> d_reduce(1, 0);
-        CudaArray1D<int> d_image(image_size);
-        d_image.copy_from(image.buffer.data(), cudaMemcpyHostToDevice);
+        CudaArray1D<int> d_image(image_size + 2, 0);
+        cudaMemcpy(d_image.data_, image.buffer.data(), image_size * sizeof(int), cudaMemcpyHostToDevice);
 
         // Nb Blocks is not fixed : it should absolutely be modified and benchmarked to get the best performance
         const int blocksize = 768;
