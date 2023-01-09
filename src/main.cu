@@ -2,9 +2,66 @@
 
 #include <chrono>
 
+#include "arguments.hh"
 #include "fix_cpu.hh"
 #include "fix_gpu.cuh"
 #include "cub_version.cuh"
+
+Arguments parse_arguments(int argc, char** argv)
+{
+    bool error = false;
+    bool benchmark = false;
+    compute_version version = GPU;
+
+    for (int i = 1; i < argc; i++)
+    {
+        if (argv[i][0] == '-' && argv[i][1] == '-')
+        {
+            std::string arg(argv[i]);
+            if (arg == "--benchmark")
+                benchmark = true;
+            else if (arg == "--version")
+            {
+                if (++i == argc)
+                {
+                    error = true;
+                    break;
+                }
+
+                if (!strcmp("gpu", argv[i]))
+                    version = GPU;
+                else if (!strcmp("cpu", argv[i]))
+                    version = CPU;
+                else if (!strcmp("gpucub", argv[i]))
+                    version = GPUandCUB;
+                else
+                {
+                    error = true;
+                    break;
+                }
+            }
+            else
+            {
+                error = true;
+                break;
+            }
+        }
+        else
+        {
+            error = true;
+            break;
+        }
+    }
+
+    if (error)
+    {
+        std::cerr << "Usage: " << argv[0] << " [--benchmark] [--version <cpu|gpu|gpucub>]\n";
+        exit(1);
+    }
+
+    return { benchmark, version };
+}
+
 
 void compare_results(const Pipeline &ref, const Pipeline &other)
 {
@@ -25,9 +82,11 @@ void compare_results(const Pipeline &ref, const Pipeline &other)
 
 int main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[])
 {
+    struct Arguments args = parse_arguments(argc, argv);
+
     // -- Pipeline initialization
 
-    std::cout << "File loading..." << std::endl;
+    std::cout << "Files loading..." << std::endl;
 
     // - Get file paths
 
@@ -35,6 +94,22 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[])
     std::vector<std::string> filepaths;
     for (const auto &dir_entry : recursive_directory_iterator("../images"))
         filepaths.emplace_back(dir_entry.path().string());
+
+    if (!args.benchmark)
+    {
+        Pipeline pipeline(filepaths);
+
+        if (args.version == CPU)
+            cpu_main(argc, argv, pipeline, true);
+        else if (args.version == GPU)
+            gpu_main(argc, argv, pipeline, true);
+        else
+            cub_main(argc, argv, pipeline, true);
+
+        return 0;
+    }
+
+    // BENCHMARK
 
     // - Init pipeline object
 

@@ -43,9 +43,6 @@ int gpu_main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[], Pipeline 
             oss << "Image#" << images[i].to_sort.id << ".pgm";
             std::string str = oss.str();
             images[i].write(str);
-
-            std::cout << "Image " << images[i].to_sort.id << " fixed\n"
-                      << std::endl;
         }
     }
 
