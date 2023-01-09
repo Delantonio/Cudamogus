@@ -1,7 +1,7 @@
 # IRGPUA
 ## AUTHORS
 
-Antoine Delettre, Arthur Le Bourg & Guillaume Poisson
+Antoine Delattre, Arthur Le Bourg & Guillaume Poisson
 
 ### Requirements to build
 
@@ -9,6 +9,7 @@ Antoine Delettre, Arthur Le Bourg & Guillaume Poisson
 * C++ compiler ([g++](https://gcc.gnu.org/) for linux,  [MSVC](https://visualstudio.microsoft.com/downloads/) for Windows)
 * [GPU supported by CUDA](https://en.wikipedia.org/wiki/CUDA#GPUs_supported)
 * [CMake](https://cmake.org/download/)
+* [CUB](https://docs.nvidia.com/cuda/cub/index.html)
 
 ### Build
 
