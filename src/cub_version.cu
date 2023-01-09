@@ -90,10 +90,10 @@ void fix_image(Image &to_fix)
     void *d_temp_storage_histo = NULL;
     size_t temp_storage_bytes_histo = 0;
     cub::DeviceHistogram::HistogramEven(d_temp_storage_histo, temp_storage_bytes_histo,
-                                        d_samples, d_histo, 256, 0, 255, image_size);
+                                        d_samples, d_histo, 257, 0, 256, image_size);
     cudaMalloc(&d_temp_storage_histo, temp_storage_bytes_histo);
     cub::DeviceHistogram::HistogramEven(d_temp_storage_histo, temp_storage_bytes_histo,
-                                        d_samples, d_histo, 256, 0, 255, image_size);
+                                        d_samples, d_histo, 257, 0, 256, image_size);
     cudaDeviceSynchronize();
 
     cudaFree(d_samples);
