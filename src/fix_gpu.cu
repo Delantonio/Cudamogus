@@ -165,7 +165,7 @@ void fix_image_gpu(CudaArray1D<int> &image_data, const int image_size, const int
 uint64_t compute_statistics(CudaArray1D<int> &image, int image_size)
 {
     CudaArray1D<int> d_reduce(1, 0);
-
+    // Nb Blocks is not fixed : it should absolutely be modified and benchmarked to get the best performance
     const int blocksize = 768;
     const int nb_blocks = (image_size + blocksize - 1) / (blocksize * 4);
 
@@ -176,6 +176,5 @@ uint64_t compute_statistics(CudaArray1D<int> &image, int image_size)
     d_reduce.copy_to((int *)&ret, cudaMemcpyDeviceToHost);
 
     d_reduce.free();
-
     return ret;
 }

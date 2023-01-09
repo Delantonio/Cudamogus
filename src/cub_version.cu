@@ -1,5 +1,6 @@
 #include "cub_version.cuh"
 #include "cuda_utils.cuh"
+#include "kernels.cuh"
 
 struct NotEqual
 {
@@ -40,52 +41,31 @@ void fix_image(Image &to_fix)
                           d_num_selected_out.data_, to_fix.buffer.size(), is_not_garbage);
     cudaDeviceSynchronize();
 
-    // num_selected_out is the number of elements that are not garbage, so it should be image_size
-    int num_selected_out;
-    d_num_selected_out.copy_to(&num_selected_out, cudaMemcpyDeviceToHost);
-    to_fix.buffer.resize(num_selected_out);
-    d_image_buffer_fixed.copy_to(to_fix.buffer.data(), cudaMemcpyDeviceToHost);
-
     d_in.free();
-    d_image_buffer_fixed.free();
     d_num_selected_out.free();
     cudaFree(d_temp_storage);
 
     // #2 Apply map to fix pixels
+    int blocksize = 256;
+    int nb_blocks = (image_size + blocksize - 1) / blocksize;
 
-    for (int i = 0; i < image_size; ++i)
-    {
-        if (i % 4 == 0)
-            to_fix.buffer[i] += 1;
-        else if (i % 4 == 1)
-            to_fix.buffer[i] -= 5;
-        else if (i % 4 == 2)
-            to_fix.buffer[i] += 3;
-        else if (i % 4 == 3)
-            to_fix.buffer[i] -= 8;
-    }
+    apply_map_to_pixels<<<nb_blocks, blocksize>>>(d_image_buffer_fixed.data_, image_size);
+    cudaDeviceSynchronize();
 
     // #3 Histogram equalization
-
-    // Histogram
-
-    std::array<int, 256> histo;
-
-    CudaArray1D<int> d_samples(image_size);
-    d_samples.copy_from(to_fix.buffer.data(), cudaMemcpyHostToDevice);
 
     CudaArray1D<int> d_histo(256, 0);
 
     void *d_temp_storage_histo = NULL;
     size_t temp_storage_bytes_histo = 0;
     cub::DeviceHistogram::HistogramEven(d_temp_storage_histo, temp_storage_bytes_histo,
-                                        d_samples.data_, d_histo.data_, 257, 0, 256, image_size);
+                                        d_image_buffer_fixed.data_, d_histo.data_, 257, 0, 256, image_size);
     cudaMalloc(&d_temp_storage_histo, temp_storage_bytes_histo);
     cub::DeviceHistogram::HistogramEven(d_temp_storage_histo, temp_storage_bytes_histo,
-                                        d_samples.data_, d_histo.data_, 257, 0, 256, image_size);
+                                        d_image_buffer_fixed.data_, d_histo.data_, 257, 0, 256, image_size);
+
     cudaDeviceSynchronize();
 
-    d_samples.free();
     cudaFree(d_temp_storage_histo);
 
     // Computed d_histo is reused in the next step so no need to copy it back to host nor free it
@@ -104,27 +84,54 @@ void fix_image(Image &to_fix)
 
     cudaDeviceSynchronize();
 
-    d_is_scan.copy_to(histo.data(), cudaMemcpyDeviceToHost);
-
-    d_is_scan.free();
     cudaFree(d_is_temp_storage);
 
     d_histo.free();
 
     // Find the first non-zero value in the cumulative histogram
 
-    auto first_none_zero = std::find_if(histo.begin(), histo.end(), [](auto v)
-                                        { return v != 0; });
+    blocksize = 768;
+    nb_blocks = (image_size + blocksize - 1) / blocksize;
 
-    const int cdf_min = *first_none_zero;
+    CudaArray1D<int> first_non_zero(1, 0);
 
-    // Apply the map transformation of the histogram equalization
+    CudaArray1D<int> predicate_find_first_non_zero(256, 0);
 
-    std::transform(to_fix.buffer.data(), to_fix.buffer.data() + image_size, to_fix.buffer.data(),
-                   [image_size, cdf_min, &histo](int pixel)
-                   {
-                       return std::roundf(((histo[pixel] - cdf_min) / static_cast<float>(image_size - cdf_min)) * 255.0f);
-                   });
+    kernel_filter_zeros<<<1, 256>>>(d_is_scan.data_, predicate_find_first_non_zero.data_);
+    cudaDeviceSynchronize();
+
+    CudaArray1D<int> scan_A(nb_blocks, 0);
+    CudaArray1D<int> scan_P(nb_blocks, 0);
+    CudaArray1D<int> blockstates(nb_blocks, 0);
+    CudaArray1D<int> counter(1, 0);
+
+    kernel_inclusive_scan<<<1, 256, sizeof(int)>>>(predicate_find_first_non_zero.data_, scan_A.data_, scan_P.data_, blockstates.data_, counter.data_, 256);
+    cudaDeviceSynchronize();
+
+    scan_A.free();
+    scan_P.free();
+    blockstates.free();
+    counter.free();
+
+    kernel_find_first_non_zero<<<1, 256>>>(d_is_scan.data_, predicate_find_first_non_zero.data_, first_non_zero.data_);
+    cudaDeviceSynchronize();
+    
+    predicate_find_first_non_zero.free();
+    
+    CudaArray1D<int> result(to_fix.buffer.size(), 0);
+
+    blocksize = 256;
+    nb_blocks = (image_size + blocksize - 1) / blocksize;
+
+    kernel_apply_map_transformation<<<nb_blocks, blocksize>>>(result.data_, d_image_buffer_fixed.data_, d_is_scan.data_, first_non_zero.data_, image_size);
+    cudaDeviceSynchronize();
+    
+    result.copy_to(to_fix.buffer.data(), cudaMemcpyDeviceToHost);
+
+    to_fix.to_sort.total = compute_statistics_cub(result, image_size);
+
+    result.free();
+    first_non_zero.free();
 }
 
 // Cub main
@@ -154,36 +161,6 @@ int cub_main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[], Pipeline 
     std::cout << "Done with compute, starting stats" << std::endl;
 
     // -- All images are now fixed : compute stats (total then sort)
-
-    // - First compute the total of each image
-
-#pragma omp parallel for
-    for (int i = 0; i < nb_images; ++i)
-    {
-        auto &image = images[i];
-        const int image_size = image.width * image.height;
-
-        CudaArray1D<int> d_image(image_size);
-        d_image.copy_from(image.buffer.data(), cudaMemcpyHostToDevice);
-
-        CudaArray1D<int> d_reduce(1);
-
-        void *d_temp_storage = NULL;
-        size_t temp_storage_bytes = 0;
-        cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes,
-                               d_image.data_, d_reduce.data_, image_size);
-        cudaMalloc(&d_temp_storage, temp_storage_bytes);
-        cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes,
-                               d_image.data_, d_reduce.data_, image_size);
-
-        cudaDeviceSynchronize();
-
-        d_reduce.copy_to((int*)&image.to_sort.total, cudaMemcpyDeviceToHost);
-
-        d_image.free();
-        d_reduce.free();
-        cudaFree(d_temp_storage);
-    }
 
     // - All totals are known, sort images accordingly (OPTIONAL)
     // Moving the actual images is too expensive, sort image indices instead
@@ -269,4 +246,27 @@ int cub_main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[], Pipeline 
     std::cout << "Done, the internet is safe now :)" << std::endl;
 
     return 0;
+}
+
+uint64_t compute_statistics_cub(CudaArray1D<int> &image, int image_size)
+{
+    CudaArray1D<int> d_reduce(1);
+
+    void *d_temp_storage = NULL;
+    size_t temp_storage_bytes = 0;
+    cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes,
+                           image.data_, d_reduce.data_, image_size);
+    cudaMalloc(&d_temp_storage, temp_storage_bytes);
+    cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes,
+                           image.data_, d_reduce.data_, image_size);
+
+    cudaDeviceSynchronize();
+
+    uint64_t ret = 0;
+    d_reduce.copy_to((int *)&ret, cudaMemcpyDeviceToHost);
+
+    d_reduce.free();
+    cudaFree(d_temp_storage);
+
+    return ret;
 }
