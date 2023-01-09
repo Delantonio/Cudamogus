@@ -6,8 +6,7 @@
 
 #include "kernels.cuh"
 
-
-int gpu_main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[], Pipeline &pipeline)
+int gpu_main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[], Pipeline &pipeline, bool write_images)
 {
     // -- Main loop containing image retring from pipeline and fixing
 
@@ -33,6 +32,26 @@ int gpu_main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[], Pipeline 
     std::cout << "Done with compute, starting stats" << std::endl;
 
     compute_statistics(images);
+
+    if (write_images)
+    {
+        for (int i = 0; i < images.size(); ++i)
+        {
+            std::string s = images[i].to_sort.id < 10 ? "0" : "";
+            std::cout << "Image #" << s << images[i].to_sort.id << " total : " << images[i].to_sort.total << std::endl;
+            std::ostringstream oss;
+            oss << "Image#" << images[i].to_sort.id << ".pgm";
+            std::string str = oss.str();
+            images[i].write(str);
+
+            std::cout << "Image " << images[i].to_sort.id << " fixed\n"
+                      << std::endl;
+        }
+    }
+
+    pipeline.upload_images(images);
+
+    std::cout << "Done, the internet is safe now :)" << std::endl;
 
     return 0;
 }
@@ -154,7 +173,7 @@ void compute_statistics(std::vector<Image> &images)
         const int blocksize = 768;
         const int nb_blocks = (image_size + blocksize - 1) / (blocksize * 4);
 
-        kernel_reduce<<<nb_blocks, blocksize>>>(d_image.data_, d_reduce.data_, image_size / 4);
+        kernel_reduce<<<nb_blocks, blocksize>>>(d_image.data_, d_reduce.data_, (image_size + 3) / 4);
         cudaDeviceSynchronize();
 
         d_reduce.copy_to((int *)&image.to_sort.total, cudaMemcpyDeviceToHost);
@@ -169,19 +188,4 @@ void compute_statistics(std::vector<Image> &images)
                   { return images[n++].to_sort; });
     std::sort(to_sort.begin(), to_sort.end(), [](ToSort a, ToSort b)
               { return a.total < b.total; });
-
-    for (int i = 0; i < images.size(); ++i)
-    {
-        std::string s = images[i].to_sort.id < 10 ? "0" : "";
-        std::cout << "Image #" << s << images[i].to_sort.id << " total : " << images[i].to_sort.total << std::endl;
-        std::ostringstream oss;
-        oss << "Image#" << images[i].to_sort.id << ".pgm";
-        std::string str = oss.str();
-        images[i].write(str);
-
-        std::cout << "Image " << images[i].to_sort.id << " fixed\n"
-                  << std::endl;
-    }
-
-    std::cout << "Done, the internet is safe now :)" << std::endl;
 }

@@ -12,4 +12,4 @@
 #include <filesystem>
 #include <numeric>
 
-int cub_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[], Pipeline &pipeline);
+int cub_main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[], Pipeline &pipeline, bool write_images);

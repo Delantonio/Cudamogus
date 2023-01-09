@@ -34,5 +34,10 @@ struct Pipeline
         return std::move(images[i]);
     }
 
+    void upload_images(std::vector<Image> &v_images)
+    {
+        images = std::move(v_images);
+    }
+
     std::vector<Image> images;
 };

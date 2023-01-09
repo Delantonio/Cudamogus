@@ -110,7 +110,7 @@ __global__ void kernel_reduce(const int *__restrict__ buffer, int *__restrict__ 
     unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
 
     int val = 0;
-    if (i < size)
+    while (i < size)
     {
         const int4 arr = reinterpret_cast<const int4*>(buffer)[i];
         val += arr.x + arr.y + arr.z + arr.w;
