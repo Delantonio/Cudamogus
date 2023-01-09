@@ -27,11 +27,18 @@ int gpu_main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[], Pipeline 
         fix_image_gpu(image_data, image_size, (int)images[i].buffer.size());
 
         image_data.copy_to(images[i].buffer.data(), cudaMemcpyDeviceToHost);
+
+        images[i].to_sort.total = compute_statistics(image_data, image_size);
         image_data.free();
     }
     std::cout << "Done with compute, starting stats" << std::endl;
 
-    compute_statistics(images);
+    using ToSort = Image::ToSort;
+    std::vector<ToSort> to_sort(images.size());
+    std::generate(to_sort.begin(), to_sort.end(), [n = 0, images]() mutable
+                  { return images[n++].to_sort; });
+    std::sort(to_sort.begin(), to_sort.end(), [](ToSort a, ToSort b)
+              { return a.total < b.total; });
 
     if (write_images)
     {
@@ -142,6 +149,7 @@ void fix_image_gpu(CudaArray1D<int> &image_data, const int image_size, const int
 
     // Apply map transformation of the histogram equalization
     image_data_copy.copy_from(image_data.data_, cudaMemcpyDeviceToDevice);
+    cudaMemset(image_data.data_ + image_size, 0, 4 * sizeof(int)); // Padding for the reduce kernel later
 
     blocksize = 256;
     nb_blocks = (image_size + blocksize - 1) / blocksize;
@@ -154,35 +162,20 @@ void fix_image_gpu(CudaArray1D<int> &image_data, const int image_size, const int
     first_non_zero.free();
 }
 
-void compute_statistics(std::vector<Image> &images)
+uint64_t compute_statistics(CudaArray1D<int> &image, int image_size)
 {
-#pragma omp parallel for
-    for (int i = 0; i < (int)images.size(); ++i)
-    {
-        auto &image = images[i];
-        const int image_size = image.width * image.height;
+    CudaArray1D<int> d_reduce(1, 0);
 
-        CudaArray1D<int> d_reduce(1, 0);
-        CudaArray1D<int> d_image(image_size);
-        d_image.copy_from(image.buffer.data(), cudaMemcpyHostToDevice);
+    const int blocksize = 768;
+    const int nb_blocks = (image_size + blocksize - 1) / (blocksize * 4);
 
-        // Nb Blocks is not fixed : it should absolutely be modified and benchmarked to get the best performance
-        const int blocksize = 768;
-        const int nb_blocks = (image_size + blocksize - 1) / (blocksize * 4);
+    kernel_reduce<<<nb_blocks, blocksize>>>(image.data_, d_reduce.data_, (image_size + 3) / 4);
+    cudaDeviceSynchronize();
 
-        kernel_reduce<<<nb_blocks, blocksize>>>(d_image.data_, d_reduce.data_, (image_size + 3) / 4);
-        cudaDeviceSynchronize();
+    uint64_t ret = 0;
+    d_reduce.copy_to((int *)&ret, cudaMemcpyDeviceToHost);
 
-        d_reduce.copy_to((int *)&image.to_sort.total, cudaMemcpyDeviceToHost);
+    d_reduce.free();
 
-        d_image.free();
-        d_reduce.free();
-    }
-
-    using ToSort = Image::ToSort;
-    std::vector<ToSort> to_sort(images.size());
-    std::generate(to_sort.begin(), to_sort.end(), [n = 0, images]() mutable
-                  { return images[n++].to_sort; });
-    std::sort(to_sort.begin(), to_sort.end(), [](ToSort a, ToSort b)
-              { return a.total < b.total; });
+    return ret;
 }
